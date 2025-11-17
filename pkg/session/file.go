@@ -34,14 +34,16 @@ type FileSession struct {
 	checkpoints map[string]*checkpointState
 	approvals   map[string]approval.Record
 	seq         uint64
+	cursors     Cursors
+	next        wal.Position
 	closed      bool
 	now         func() time.Time
 }
 
 type checkpointState struct {
 	position wal.Position
+	payload  Checkpoint
 	snapshot []Message
-	created  time.Time
 }
 
 // NewFileSession creates (or re-opens) a durable session located at root/id.
@@ -68,6 +70,7 @@ func NewFileSession(id, root string, opts ...wal.Option) (*FileSession, error) {
 		walOpts:     append([]wal.Option(nil), opts...),
 		checkpoints: make(map[string]*checkpointState),
 		approvals:   make(map[string]approval.Record),
+		cursors:     make(Cursors),
 		now:         time.Now,
 	}
 	if err := fs.reload(); err != nil {
@@ -240,11 +243,22 @@ func (s *FileSession) Checkpoint(name string) error {
 		return ErrSessionClosed
 	}
 	snapshot := cloneMessages(s.messages)
+	statePayload, err := encodeCheckpointMessages(snapshot)
+	if err != nil {
+		return err
+	}
+	if len(statePayload) > MaxCheckpointBytes {
+		return fmt.Errorf("%w: %d bytes > %d", ErrCheckpointTooLarge, len(statePayload), MaxCheckpointBytes)
+	}
+	cp := Checkpoint{
+		Name:      normalized,
+		Timestamp: s.now().UTC(),
+		State:     statePayload,
+		Cursors:   s.pendingCursors(recordCheckpoint),
+	}
 	record := walRecord{
 		Kind:       recordCheckpoint,
-		Checkpoint: normalized,
-		Snapshot:   snapshot,
-		Created:    s.now().UTC(),
+		Checkpoint: &cp,
 	}
 	pos, err := s.appendRecord(record)
 	if err != nil {
@@ -252,8 +266,8 @@ func (s *FileSession) Checkpoint(name string) error {
 	}
 	s.checkpoints[normalized] = &checkpointState{
 		position: pos,
+		payload:  cp.Clone(),
 		snapshot: snapshot,
-		created:  record.Created,
 	}
 	s.gcLocked()
 	return nil
@@ -276,8 +290,8 @@ func (s *FileSession) Resume(name string) error {
 	}
 	restore := cloneMessages(cp.snapshot)
 	record := walRecord{
-		Kind:       recordResume,
-		Checkpoint: normalized,
+		Kind:   recordResume,
+		Resume: normalized,
 	}
 	if _, err := s.appendRecord(record); err != nil {
 		return err
@@ -334,6 +348,11 @@ func (s *FileSession) appendRecord(rec walRecord) (wal.Position, error) {
 	if err := s.log.Sync(); err != nil {
 		return 0, err
 	}
+	if s.cursors == nil {
+		s.cursors = make(Cursors)
+	}
+	s.cursors[channelForKind(rec.Kind)] = pos
+	s.next = pos + 1
 	return pos, nil
 }
 
@@ -342,13 +361,19 @@ func (s *FileSession) reload() error {
 		messages    []Message
 		checkpoints = make(map[string]*checkpointState)
 		approvals   = make(map[string]approval.Record)
+		cursors     = make(Cursors)
 		seq         uint64
+		lastPos     wal.Position = -1
 	)
 	err := s.log.Replay(func(e wal.Entry) error {
 		var rec walRecord
 		if err := json.Unmarshal(e.Data, &rec); err != nil {
 			return err
 		}
+		if e.Position > lastPos {
+			lastPos = e.Position
+		}
+		cursors[channelForKind(rec.Kind)] = e.Position
 		switch rec.Kind {
 		case recordMessage:
 			if rec.Message == nil {
@@ -359,18 +384,30 @@ func (s *FileSession) reload() error {
 			messages = append(messages, msg)
 			seq++
 		case recordCheckpoint:
-			cpSnapshot := cloneMessages(rec.Snapshot)
+			if rec.Checkpoint == nil {
+				return fmt.Errorf("session: checkpoint payload missing")
+			}
+			cpSnapshot, err := decodeCheckpointMessages(rec.Checkpoint.State)
+			if err != nil {
+				return err
+			}
 			messages = cloneMessages(cpSnapshot)
 			seq = uint64(len(messages))
-			checkpoints[rec.Checkpoint] = &checkpointState{
+			cp := rec.Checkpoint.Clone()
+			cp.Timestamp = cp.Timestamp.UTC()
+			checkpoints[cp.Name] = &checkpointState{
 				position: e.Position,
+				payload:  cp,
 				snapshot: cpSnapshot,
-				created:  rec.Created.UTC(),
 			}
 		case recordResume:
-			cp, ok := checkpoints[rec.Checkpoint]
+			name := strings.TrimSpace(rec.Resume)
+			if name == "" {
+				return fmt.Errorf("session: resume references unknown checkpoint %q", rec.Resume)
+			}
+			cp, ok := checkpoints[name]
 			if !ok {
-				return fmt.Errorf("session: resume references unknown checkpoint %s", rec.Checkpoint)
+				return fmt.Errorf("session: resume references unknown checkpoint %s", name)
 			}
 			messages = cloneMessages(cp.snapshot)
 			seq = uint64(len(messages))
@@ -392,7 +429,26 @@ func (s *FileSession) reload() error {
 	s.checkpoints = checkpoints
 	s.approvals = approvals
 	s.seq = seq
+	s.cursors = cursors
+	if lastPos >= 0 {
+		s.next = lastPos + 1
+	} else {
+		s.next = 0
+	}
 	return nil
+}
+
+func (s *FileSession) pendingCursors(kind string) Cursors {
+	c := s.cursors.Clone()
+	if c == nil {
+		c = make(Cursors)
+	}
+	pos := s.next
+	if pos < 0 {
+		pos = 0
+	}
+	c[channelForKind(kind)] = pos
+	return c
 }
 
 func (s *FileSession) gcLocked() {
@@ -433,10 +489,48 @@ func cloneApprovalRecord(rec approval.Record) approval.Record {
 type walRecord struct {
 	Kind       string           `json:"kind"`
 	Message    *Message         `json:"message,omitempty"`
-	Checkpoint string           `json:"checkpoint,omitempty"`
-	Snapshot   []Message        `json:"snapshot,omitempty"`
-	Created    time.Time        `json:"created,omitempty"`
+	Checkpoint *Checkpoint      `json:"checkpoint,omitempty"`
+	Resume     string           `json:"resume,omitempty"`
 	Approval   *approval.Record `json:"approval,omitempty"`
+}
+
+func encodeCheckpointMessages(msgs []Message) (json.RawMessage, error) {
+	if len(msgs) == 0 {
+		return json.RawMessage([]byte("[]")), nil
+	}
+	data, err := json.Marshal(msgs)
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(data), nil
+}
+
+func decodeCheckpointMessages(raw json.RawMessage) ([]Message, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var msgs []Message
+	if err := json.Unmarshal(raw, &msgs); err != nil {
+		return nil, err
+	}
+	for i := range msgs {
+		msgs[i].Timestamp = msgs[i].Timestamp.UTC()
+		msgs[i].ToolCalls = cloneToolCalls(msgs[i].ToolCalls)
+	}
+	return cloneMessages(msgs), nil
+}
+
+func channelForKind(kind string) Channel {
+	switch kind {
+	case recordMessage:
+		return ChannelProgress
+	case recordCheckpoint, recordResume:
+		return ChannelControl
+	case recordApproval:
+		return ChannelMonitor
+	default:
+		return ChannelProgress
+	}
 }
 
 var _ Session = (*FileSession)(nil)

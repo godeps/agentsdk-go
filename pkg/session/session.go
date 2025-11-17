@@ -9,6 +9,8 @@ var (
 	ErrCheckpointNotFound = errors.New("session: checkpoint not found")
 	// ErrInvalidCheckpointName indicates the provided checkpoint identifier is empty or malformed.
 	ErrInvalidCheckpointName = errors.New("session: invalid checkpoint name")
+	// ErrCheckpointTooLarge indicates the serialized checkpoint exceeds the allowed size.
+	ErrCheckpointTooLarge = errors.New("session: checkpoint exceeds maximum payload size")
 	// ErrInvalidSessionID indicates the provided session identifier is empty or malformed.
 	ErrInvalidSessionID = errors.New("session: invalid session id")
 	// ErrInvalidMessage signals that the supplied message is structurally invalid.

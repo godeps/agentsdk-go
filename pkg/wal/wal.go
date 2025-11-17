@@ -165,6 +165,22 @@ func (w *WAL) Sync() error {
 	return w.syncLocked()
 }
 
+// Fsync flushes buffers and forces durability even when sync is disabled.
+func (w *WAL) Fsync() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return ErrClosed
+	}
+	if err := w.flushLocked(); err != nil {
+		return err
+	}
+	if w.file == nil {
+		return nil
+	}
+	return w.file.Sync()
+}
+
 // Replay iterates through every record in order.
 func (w *WAL) Replay(apply func(Entry) error) error {
 	if apply == nil {
@@ -178,6 +194,37 @@ func (w *WAL) Replay(apply func(Entry) error) error {
 
 	for _, seg := range w.segments {
 		if err := replaySegment(seg, apply); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReadSince invokes apply for entries whose Position >= start.
+func (w *WAL) ReadSince(start Position, apply func(Entry) error) error {
+	if apply == nil {
+		return fmt.Errorf("wal: replay callback required")
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return ErrClosed
+	}
+	if start < w.base {
+		start = w.base
+	}
+	if err := w.syncLocked(); err != nil {
+		return err
+	}
+	for _, seg := range w.segments {
+		if seg.end < start {
+			continue
+		}
+		from := start
+		if from < seg.start {
+			from = seg.start
+		}
+		if err := replaySegmentFrom(seg, from, apply); err != nil {
 			return err
 		}
 	}
@@ -235,6 +282,19 @@ func (w *WAL) Truncate(upto Position) error {
 	return w.persistMetaLocked()
 }
 
+// Rotate forces a new WAL segment immediately.
+func (w *WAL) Rotate() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.closed {
+		return ErrClosed
+	}
+	if err := w.syncLocked(); err != nil {
+		return err
+	}
+	return w.rotateLocked()
+}
+
 // Close flushes and releases underlying resources.
 func (w *WAL) Close() error {
 	w.mu.Lock()
@@ -265,6 +325,13 @@ func (w *WAL) rollLocked(nextLen int) error {
 	}
 	if w.current.size+int64(nextLen) <= w.cfg.segmentBytes {
 		return nil
+	}
+	return w.rotateLocked()
+}
+
+func (w *WAL) rotateLocked() error {
+	if w.current == nil {
+		return w.createSegmentLocked()
 	}
 	if err := w.file.Close(); err != nil {
 		return err
@@ -323,13 +390,20 @@ func (w *WAL) createSegmentLocked() error {
 }
 
 func (w *WAL) syncLocked() error {
+	if err := w.flushLocked(); err != nil {
+		return err
+	}
+	if w.file != nil && !w.cfg.disableSync {
+		return w.file.Sync()
+	}
+	return nil
+}
+
+func (w *WAL) flushLocked() error {
 	if w.writer != nil {
 		if err := w.writer.Flush(); err != nil {
 			return err
 		}
-	}
-	if w.file != nil && !w.cfg.disableSync {
-		return w.file.Sync()
 	}
 	return nil
 }
@@ -410,8 +484,14 @@ func (w *WAL) scanSegment(path string, idx int64, start Position) (*segment, Pos
 }
 
 func replaySegment(seg *segment, apply func(Entry) error) error {
+	return replaySegmentFrom(seg, seg.start, apply)
+}
+
+func replaySegmentFrom(seg *segment, start Position, apply func(Entry) error) error {
 	if seg.end < seg.start {
-		// no data yet
+		return nil
+	}
+	if start > seg.end {
 		return nil
 	}
 	file, err := os.Open(seg.path)
@@ -428,15 +508,16 @@ func replaySegment(seg *segment, apply func(Entry) error) error {
 			break
 		}
 		if errors.Is(err, errPartial) {
-			// ignore dangling bytes
 			break
 		}
 		if err != nil {
 			return err
 		}
-		entry.Position = pos
-		if err := apply(entry); err != nil {
-			return err
+		if pos >= start {
+			entry.Position = pos
+			if err := apply(entry); err != nil {
+				return err
+			}
 		}
 		pos++
 	}

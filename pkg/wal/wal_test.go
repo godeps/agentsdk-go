@@ -3,6 +3,7 @@ package wal
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sync"
 	"testing"
@@ -178,6 +179,85 @@ func TestWALTruncateRemovesOldSegments(t *testing.T) {
 	}
 	if replay[0].Position != cut {
 		t.Fatalf("first position = %d want %d", replay[0].Position, cut)
+	}
+}
+
+func TestWALReadSince(t *testing.T) {
+	dir := t.TempDir()
+	w, err := Open(dir, WithSegmentBytes(1<<12))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer w.Close()
+
+	var positions []Position
+	for i := 0; i < 5; i++ {
+		pos, err := w.Append(Entry{Type: "msg", Data: []byte{byte(i)}})
+		if err != nil {
+			t.Fatalf("append #%d: %v", i, err)
+		}
+		positions = append(positions, pos)
+	}
+	var seen []int
+	if err := w.ReadSince(positions[2], func(e Entry) error {
+		seen = append(seen, int(e.Data[0]))
+		return nil
+	}); err != nil {
+		t.Fatalf("read since: %v", err)
+	}
+	if want := []int{2, 3, 4}; !reflect.DeepEqual(seen, want) {
+		t.Fatalf("read since = %v want %v", seen, want)
+	}
+
+	if err := w.Truncate(positions[3]); err != nil {
+		t.Fatalf("truncate: %v", err)
+	}
+	seen = nil
+	if err := w.ReadSince(0, func(e Entry) error {
+		seen = append(seen, int(e.Data[0]))
+		return nil
+	}); err != nil {
+		t.Fatalf("read since after truncate: %v", err)
+	}
+	if want := []int{3, 4}; !reflect.DeepEqual(seen, want) {
+		t.Fatalf("post-truncate read = %v want %v", seen, want)
+	}
+}
+
+func TestWALRotateForcesNewSegment(t *testing.T) {
+	dir := t.TempDir()
+	w, err := Open(dir, WithSegmentBytes(1<<20))
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer w.Close()
+
+	if _, err := w.Append(Entry{Type: "msg", Data: []byte("before")}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	if w.current == nil {
+		t.Fatal("current segment missing")
+	}
+	oldPath := w.current.path
+	oldIndex := w.current.index
+	if err := w.Rotate(); err != nil {
+		t.Fatalf("rotate: %v", err)
+	}
+	if w.current == nil {
+		t.Fatal("current after rotate nil")
+	}
+	if w.current.path == oldPath {
+		t.Fatalf("rotate did not change segment")
+	}
+	if w.current.index != oldIndex+1 {
+		t.Fatalf("segment index = %d want %d", w.current.index, oldIndex+1)
+	}
+	files, err := filepath.Glob(filepath.Join(dir, "segment-*.wal"))
+	if err != nil {
+		t.Fatalf("glob: %v", err)
+	}
+	if len(files) < 2 {
+		t.Fatalf("expected >=2 segments, got %d", len(files))
 	}
 }
 

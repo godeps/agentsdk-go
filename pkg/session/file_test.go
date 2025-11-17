@@ -1,9 +1,11 @@
 package session
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -189,6 +191,22 @@ func TestFileSessionGCRetainsCheckpoints(t *testing.T) {
 	}
 	if len(segments) == 0 {
 		t.Fatalf("no segments on disk")
+	}
+}
+
+func TestFileSessionCheckpointSizeLimit(t *testing.T) {
+	dir := t.TempDir()
+	sess := newTestFileSession(t, "limit", dir, wal.WithDisabledSync())
+	t.Cleanup(func() { _ = sess.Close() })
+
+	blob := strings.Repeat("x", MaxCheckpointBytes/2)
+	for i := 0; i < 3; i++ {
+		if err := sess.Append(Message{Role: "user", Content: blob}); err != nil {
+			t.Fatalf("append: %v", err)
+		}
+	}
+	if err := sess.Checkpoint("huge"); !errors.Is(err, ErrCheckpointTooLarge) {
+		t.Fatalf("expected ErrCheckpointTooLarge, got %v", err)
 	}
 }
 
