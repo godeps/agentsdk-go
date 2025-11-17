@@ -20,7 +20,7 @@ agentsdk-go 支持多种 LLM 提供商，通过环境变量配置：
 
 ```bash
 export ANTHROPIC_BASE_URL="https://api.kimi.com/coding"
-export ANTHROPIC_API_KEY="sk-kimi-V32mKLtdl5lVL24DejzJXEGkZMxXwcNdGSpW08Qfr7eDKIVliaefYycvReeJ8DGe"
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-your-api-key-here}"
 ```
 
 #### Anthropic Claude
@@ -153,7 +153,7 @@ Tool Calls: 1
 ```bash
 # 设置 Kimi API
 export ANTHROPIC_BASE_URL="https://api.kimi.com/coding"
-export ANTHROPIC_API_KEY="sk-kimi-V32mKLtdl5lVL24DejzJXEGkZMxXwcNdGSpW08Qfr7eDKIVliaefYycvReeJ8DGe"
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-your-api-key-here}"
 
 # 运行示例
 go run examples/basic/main.go
@@ -177,7 +177,7 @@ input=41 output=72 total=113 cache=0
 ```bash
 # 启动 SSE 服务器
 export ANTHROPIC_BASE_URL="https://api.kimi.com/coding"
-export ANTHROPIC_API_KEY="sk-kimi-V32mKLtdl5lVL24DejzJXEGkZMxXwcNdGSpW08Qfr7eDKIVliaefYycvReeJ8DGe"
+export ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-your-api-key-here}"
 
 go run examples/stream/main.go
 ```
@@ -206,7 +206,7 @@ cd cmd/agentctl
 go run . config init
 
 # 设置 API 密钥
-go run . config set api_key "sk-kimi-V32mKLtdl5lVL24DejzJXEGkZMxXwcNdGSpW08Qfr7eDKIVliaefYycvReeJ8DGe"
+go run . config set api_key "${ANTHROPIC_API_KEY:-your-api-key-here}"
 go run . config set base_url "https://api.kimi.com/coding"
 
 # 运行任务

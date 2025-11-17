@@ -4,8 +4,14 @@
 cd "$(dirname "$0")"
 
 # 加载环境变量
-export ANTHROPIC_API_KEY="sk-kimi-YMaf5ozXXeHhucpuns8Rnzl700NaNWZG70njIqKiHGGBGtobZ1y4FCIkFtv73w97"
-export ANTHROPIC_BASE_URL="https://api.kimi.com/coding"
+API_KEY="${ANTHROPIC_API_KEY:-""}"
+if [ -z "$API_KEY" ]; then
+  echo "请先通过环境变量 ANTHROPIC_API_KEY 提供 API 密钥，例如 export ANTHROPIC_API_KEY=\"your-api-key-here\"" >&2
+  exit 1
+fi
+
+export ANTHROPIC_API_KEY="$API_KEY"
+export ANTHROPIC_BASE_URL="${ANTHROPIC_BASE_URL:-https://api.kimi.com/coding}"
 
 echo "==================================="
 echo "  自定义工具示例"

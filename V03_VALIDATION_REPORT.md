@@ -62,7 +62,7 @@
 **环境变量配置**:
 ```env
 ANTHROPIC_BASE_URL="https://api.kimi.com/coding"
-ANTHROPIC_API_KEY="sk-kimi-YMaf5ozXXeHhucpuns8Rnzl700NaNWZG70njIqKiHGGBGtobZ1y4FCIkFtv73w97"
+ANTHROPIC_API_KEY="your-api-key-here"
 ```
 
 **执行结果**:
