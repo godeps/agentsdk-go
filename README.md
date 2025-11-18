@@ -198,6 +198,86 @@ cd cmd/cli
 go run main.go --api-key=your-key --model=claude-sonnet-4-5
 ```
 
+## HTTP API 使用
+
+agentsdk-go 提供了开箱即用的 HTTP API，支持 Anthropic 兼容的 SSE（Server-Sent Events）流式进度推送。
+
+### HTTP 服务器示例
+
+参见 `examples/http` 目录，启动方法：
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-...
+cd examples/http
+go run .
+```
+
+服务器默认监听 `:8080`，提供以下端点：
+
+- `POST /v1/run` - 阻塞式请求，等待完整响应
+- `POST /v1/run/stream` - SSE 流式推送，实时进度反馈
+- `POST /v1/tools/execute` - 直接执行工具调用
+
+### SSE 流式进度推送
+
+`/v1/run/stream` 端点实现了完整的 Anthropic 兼容 SSE 事件流，提供实时进度反馈：
+
+```bash
+curl -N -X POST http://localhost:8080/v1/run/stream \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "列出当前目录", "session_id": "demo"}'
+```
+
+**事件流序列**（Anthropic 兼容）：
+
+```
+event: agent_start
+data: {"type":"agent_start","session_id":"demo"}
+
+event: iteration_start
+data: {"type":"iteration_start","iteration":0}
+
+event: message_start
+data: {"type":"message_start","message":{...}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"我"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"来"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: tool_execution_start
+data: {"type":"tool_execution_start","tool_use_id":"toolu_123","name":"bash_execute"}
+
+event: tool_execution_stop
+data: {"type":"tool_execution_stop","tool_use_id":"toolu_123","output":"file1.txt\nfile2.txt"}
+
+event: iteration_stop
+data: {"type":"iteration_stop","iteration":0}
+
+event: agent_stop
+data: {"type":"agent_stop","total_iterations":1}
+
+event: message_stop
+data: {"type":"message_stop","message":{...}}
+```
+
+**核心特性**：
+
+1. **Anthropic 完全兼容**：事件结构 100% 兼容 Anthropic Messages API
+2. **逐字符流式输出**：`content_block_delta` 事件逐字符推送 LLM 生成的文本
+3. **工具执行进度**：`tool_execution_start/stop` 事件实时反馈工具调用
+4. **6 个拦截点**：基于 Progress Middleware 实现，可扩展自定义事件
+5. **心跳保活**：每 15 秒发送 `ping` 事件防止连接断开
+
+详见 [examples/http/README.md](examples/http/README.md) 获取完整文档。
+
 ## 配置
 
 项目使用 `.claude/` 目录结构进行配置（兼容 Claude Code）：

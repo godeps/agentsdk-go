@@ -20,3 +20,7 @@ vendor/
 .DS_Store
 
 basic
+
+# Example binaries
+examples/cli/cli
+examples/mcp/mcp
