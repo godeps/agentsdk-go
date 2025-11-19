@@ -238,6 +238,8 @@
     const blockState = new Map();    // index -> {type,id,name}
     const toolInputs = new Map();    // tool_use_id -> 输入累积字符串
     const toolBubbles = new Map();   // tool_use_id -> DOM
+    let busyNote = '';               // 顶部状态栏内的忙碌提示
+    let usageNote = '';              // 顶部状态栏内的用量信息
 
     // 工具函数：创建聊天气泡
     function addBubble(role, text = '', title = '') {
@@ -267,11 +269,56 @@
       }
     }
 
-    // 工具函数：更新状态提示
+    // 工具函数：刷新头部状态提示
+    function refreshStatus() {
+      if (busyNote && usageNote) {
+        statusEl.textContent = `${busyNote} · ${usageNote}`;
+      } else {
+        statusEl.textContent = busyNote || usageNote;
+      }
+    }
+
+    // 工具函数：更新忙碌状态并锁定输入
     function setBusy(isBusy, msg = '') {
       sendBtn.disabled = isBusy;
       promptEl.disabled = isBusy;
-      statusEl.textContent = msg;
+      busyNote = isBusy ? msg : '';
+      refreshStatus();
+    }
+
+    // 工具函数：格式化 usage 信息
+    function formatUsage(usage) {
+      if (!usage || typeof usage !== 'object') return '';
+      const input = usage.input_tokens ?? usage.InputTokens ?? usage.inputTokens;
+      const output = usage.output_tokens ?? usage.OutputTokens ?? usage.outputTokens;
+      const total = usage.total_tokens ?? usage.TotalTokens ?? usage.totalTokens;
+      const durationMs = usage.duration_ms ?? usage.DurationMs ?? usage.durationMs;
+      const cost = usage.cost ?? usage.Cost ?? usage.credits ?? usage.Credits;
+
+      const parts = [];
+      if (total !== undefined) parts.push(`总 ${total} tokens`);
+      const io = [
+        input !== undefined ? `入 ${input}` : null,
+        output !== undefined ? `出 ${output}` : null,
+      ].filter(Boolean).join(' / ');
+      if (io) parts.push(io);
+      const duration = Number(durationMs);
+      if (!Number.isNaN(duration) && duration >= 0) {
+        parts.push(`耗时 ${(duration / 1000).toFixed(2)}s`);
+      }
+      if (cost !== undefined) {
+        const costText = typeof cost === 'number' ? `$${cost}` : String(cost);
+        parts.push(`成本 ${costText}`);
+      }
+      return parts.length ? `用量：${parts.join(' · ')}` : '';
+    }
+
+    // 工具函数：写入 usage 信息并展示
+    function updateUsageInfo(usage) {
+      const text = formatUsage(usage);
+      if (!text) return;
+      usageNote = text;
+      refreshStatus();
     }
 
     // 处理文本流，确保同一轮回答复用一个助手气泡
@@ -316,10 +363,34 @@
     function handleEvent(evt) {
       if (!evt || !evt.type) return;
       switch (evt.type) {
+        // agent_start：Agent 生命周期开始
+        case 'agent_start':
+          addBubble('system', '🤖 Agent 启动', '系统');
+          break;
+        // agent_stop：Agent 结束
+        case 'agent_stop':
+          addBubble('system', '✅ Agent 完成', '系统');
+          break;
+        // iteration_start：一次循环推理开始，展示迭代次数
+        case 'iteration_start': {
+          const iter = evt.iteration ?? evt.Iteration;
+          const label = iter !== undefined ? `迭代 #${iter}` : '迭代开始';
+          addBubble('system', `♻️ ${label}`, '系统');
+          break;
+        }
+        // iteration_stop：结束事件静默处理，避免噪音
+        case 'iteration_stop':
+          break;
+        // message_start：新的助手消息开始
         case 'message_start':
           assistantBubble = addBubble('assistant', '', '助手');
           blockState.clear();
           break;
+        // message_delta：累计 usage 等元信息
+        case 'message_delta':
+          updateUsageInfo(evt.usage ?? evt.Usage);
+          break;
+        // content_block_start：记录当前 block 元信息（文本或工具）
         case 'content_block_start': {
           const idx = evt.index ?? evt.Index;
           const info = {
@@ -334,6 +405,7 @@
           }
           break;
         }
+        // content_block_delta：文本流或工具入参增量
         case 'content_block_delta': {
           const idx = evt.index ?? evt.Index;
           const info = idx !== undefined ? blockState.get(idx) : null;
@@ -343,54 +415,71 @@
             const key = info.id || `tool-${idx ?? '0'}`;
             const name = info.name || 'tool';
             const bubble = getToolBubble(key, name, '入参');
-            const chunk = evt.delta.partial_json || evt.delta.partialJson || evt.delta.partialJSON || '';
+            const chunk = evt.delta.partial_json || '';
             const merged = (toolInputs.get(key) || '') + chunk;
             toolInputs.set(key, merged);
             bubble.body.textContent = prettyJSON(merged);
           }
           break;
         }
+        // content_block_stop：单个 block 已完成
         case 'content_block_stop':
           if (assistantBubble) assistantBubble.body.classList.remove('streaming');
           if (evt.index !== undefined) blockState.delete(evt.index);
           if (evt.Index !== undefined) blockState.delete(evt.Index);
           break;
+        // message_stop：整条消息结束，停止闪烁
         case 'message_stop':
           if (assistantBubble) assistantBubble.body.classList.remove('streaming');
           assistantBubble = null;
           break;
+        // tool_execution_start：工具开始执行，提示状态
         case 'tool_execution_start': {
           const key = evt.tool_use_id || evt.ToolUseID || evt.content_block?.id || 'tool';
-          const bubble = getToolBubble(key, evt.name || 'tool', '开始执行');
-          bubble.body.textContent = '执行中...';
+          const toolName = evt.name || evt.tool_name || 'tool';
+          const bubble = getToolBubble(key, toolName, '执行');
+          bubble.body.textContent = `⏳ ${toolName} - 执行中`;
           bubble.wrap.classList.add('streaming');
           break;
         }
+        // tool_execution_output：持续输出工具产物
         case 'tool_execution_output': {
           const key = evt.tool_use_id || evt.ToolUseID || 'tool';
-          const bubble = getToolBubble(key, evt.name || 'tool');
+          const toolName = evt.name || evt.tool_name || 'tool';
+          const bubble = getToolBubble(key, toolName, '执行');
           bubble.wrap.classList.add('streaming');
-          bubble.body.textContent += (bubble.body.textContent ? '\n' : '') + String(evt.output ?? evt.Output ?? '');
+          const raw = evt.output ?? evt.Output ?? '';
+          const chunk = typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2);
+          bubble.body.textContent += (bubble.body.textContent ? '\n' : '') + chunk;
           break;
         }
+        // tool_execution_result：工具完成并输出 JSON 结构
         case 'tool_execution_result': {
           const key = evt.tool_use_id || evt.ToolUseID || 'tool';
-          const bubble = getToolBubble(key, evt.name || 'tool', '完成');
+          const toolName = evt.name || evt.tool_name || 'tool';
+          const bubble = getToolBubble(key, toolName, '完成');
           bubble.wrap.classList.remove('streaming');
           const payload = evt.output ?? evt.Output;
-          const text = typeof payload === 'object' ? JSON.stringify(payload, null, 2) : String(payload ?? '完成');
-          bubble.body.textContent = text;
+          let formatted = '';
+          if (payload !== undefined) {
+            formatted = typeof payload === 'string' ? prettyJSON(payload) : JSON.stringify(payload, null, 2);
+          }
+          bubble.body.textContent = `✅ ${toolName} - 完成${formatted ? `\n${formatted}` : ''}`;
           break;
         }
-        case 'error':
-          addBubble('system', String(evt.output || evt.message || '未知错误'), '错误');
+        // error：高亮展示错误详情
+        case 'error': {
+          const detail = evt.output ?? evt.message ?? evt.error ?? evt.Error ?? evt.details ?? '未知错误';
+          const text = typeof detail === 'object' ? JSON.stringify(detail, null, 2) : String(detail);
+          addBubble('system', `❌ ${text}`, '错误');
           break;
+        }
+        // ping：保持连接心跳，不渲染
         case 'ping':
-          // 心跳不显示
           break;
+        // 其他事件：直接打印原始 JSON，方便排查
         default:
-          // 其余事件直接附注
-          addBubble('system', JSON.stringify(evt), evt.type);
+          addBubble('system', JSON.stringify(evt, null, 2), evt.type);
       }
     }
 
@@ -438,7 +527,13 @@
             const chunk = buffer.slice(0, sep);
             buffer = buffer.slice(sep + 2);
             const evt = parseSSEBlock(chunk.trim());
-            if (evt) handleEvent(evt);
+            if (evt) {
+              handleEvent(evt);
+              if (evt.type === 'content_block_delta' && evt.delta?.type === 'text_delta') {
+                // 让出事件循环，避免批量渲染，保障文本逐字符实时刷新
+                await new Promise((resolve) => setTimeout(resolve, 0));
+              }
+            }
             sep = buffer.indexOf('\n\n');
           }
         }
@@ -478,6 +573,7 @@
       blockState.clear();
       assistantBubble = null;
       if (controller) controller.abort();
+      usageNote = '';
       setBusy(false, '');
     });
 
