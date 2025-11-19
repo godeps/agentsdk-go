@@ -586,7 +586,11 @@ func TestTraceMiddlewareSameSessionMultipleWrites(t *testing.T) {
 
 	fileEvents := assertJSONLValid(t, jsonPath, 3)
 	for idx, evt := range fileEvents {
-		if session, _ := evt["session_id"].(string); session != sessionID {
+		session, ok := evt["session_id"].(string)
+		if !ok {
+			t.Fatalf("json event %d session_id is not a string", idx)
+		}
+		if session != sessionID {
 			t.Fatalf("json event %d session mismatch: %v", idx, evt["session_id"])
 		}
 	}
