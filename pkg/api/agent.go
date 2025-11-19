@@ -140,8 +140,9 @@ func (rt *Runtime) RunStream(ctx context.Context, req Request) (<-chan StreamEve
 	if err != nil {
 		return nil, err
 	}
-	out := make(chan StreamEvent, 16)
-	progressChan := make(chan StreamEvent, 8)
+	// 缓冲区增大以吸收前端延迟（逐字符渲染等）导致的背压，避免 progress emit 阻塞工具执行
+	out := make(chan StreamEvent, 512)
+	progressChan := make(chan StreamEvent, 256)
 	baseCtx := prep.ctx
 	if baseCtx == nil {
 		baseCtx = context.Background()

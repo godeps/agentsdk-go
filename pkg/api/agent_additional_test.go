@@ -303,14 +303,18 @@ func TestDefaultSessionIDUsesEntrypoint(t *testing.T) {
 
 func TestToolWhitelistDeniesExecution(t *testing.T) {
 	root := newClaudeProject(t)
-	mdl := &stubModel{responses: []*model.Response{{Message: model.Message{Role: "assistant", ToolCalls: []model.ToolCall{{ID: "c1", Name: "echo", Arguments: map[string]any{"text": "hi"}}}}}}}
+	mdl := &stubModel{responses: []*model.Response{
+		{Message: model.Message{Role: "assistant", ToolCalls: []model.ToolCall{
+			{ID: "c1", Name: "echo", Arguments: map[string]any{"text": "hi"}},
+		}}},
+	}}
 	rt, err := New(context.Background(), Options{ProjectRoot: root, Model: mdl, Tools: []tool.Tool{&echoTool{}}})
 	if err != nil {
 		t.Fatalf("runtime: %v", err)
 	}
 	defer rt.Close()
 
-	_, err = rt.Run(context.Background(), Request{Prompt: "call", ToolWhitelist: []string{}})
+	_, err = rt.Run(context.Background(), Request{Prompt: "call", ToolWhitelist: []string{"other"}})
 	if err == nil {
 		t.Fatal("expected whitelist error")
 	}

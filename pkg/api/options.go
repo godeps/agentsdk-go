@@ -252,26 +252,17 @@ func (o Options) withDefaults() Options {
 	return o
 }
 
-// defaultNetworkAllowList 根据 EntryPoint 返回默认网络白名单
-func defaultNetworkAllowList(ep EntryPoint) []string {
-	switch ep {
-	case EntryPointCLI:
-		// CLI 模式：允许本机所有网段访问
-		return []string{
-			"localhost",
-			"127.0.0.1",
-			"::1",       // IPv6 localhost
-			"0.0.0.0",   // 本机所有接口
-			"*.local",   // mDNS 本地域名
-			"192.168.*", // 常见私有网段
-			"10.*",      // 私有网段
-			"172.16.*",  // 私有网段
-		}
-	case EntryPointCI, EntryPointPlatform:
-		// CI/Platform 模式：严格限制，默认空白名单
-		return []string{}
-	default:
-		return []string{}
+// defaultNetworkAllowList 默认允许本地网络；访问外网需显式配置
+func defaultNetworkAllowList(_ EntryPoint) []string {
+	return []string{
+		"localhost",
+		"127.0.0.1",
+		"::1",       // IPv6 localhost
+		"0.0.0.0",   // 本机所有接口
+		"*.local",   // 本地域名
+		"192.168.*", // 私有网段
+		"10.*",      // 私有网段
+		"172.16.*",  // 私有网段
 	}
 }
 
