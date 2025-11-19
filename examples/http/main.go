@@ -61,9 +61,11 @@ func main() {
 	}
 	defer rt.Close()
 
+	staticDir := filepath.Join(filepath.Dir(os.Args[0]), "static")
+
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           buildMux(rt, mode, defaultTimeout),
+		Handler:           buildMux(rt, mode, defaultTimeout, staticDir),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -87,15 +89,38 @@ func main() {
 	log.Println("server exited cleanly")
 }
 
-func buildMux(rt *api.Runtime, mode api.ModeContext, defaultTimeout time.Duration) *http.ServeMux {
+func buildMux(rt *api.Runtime, mode api.ModeContext, defaultTimeout time.Duration, staticDir string) *http.ServeMux {
+	resolvedStaticDir := resolveStaticDir(staticDir)
 	srv := &httpServer{
 		runtime:        rt,
 		mode:           mode,
 		defaultTimeout: defaultTimeout,
+		staticDir:      resolvedStaticDir,
 	}
 	mux := http.NewServeMux()
 	srv.registerRoutes(mux)
 	return mux
+}
+
+// 静态目录优先使用二进制同级目录，不存在则退回源码路径
+func resolveStaticDir(staticDir string) string {
+	if strings.TrimSpace(staticDir) == "" {
+		staticDir = filepath.Join(filepath.Dir(os.Args[0]), "static")
+	}
+	if abs, err := filepath.Abs(staticDir); err == nil {
+		staticDir = abs
+	}
+	if info, err := os.Stat(staticDir); err == nil && info.IsDir() {
+		return staticDir
+	}
+	fallback := filepath.Join("examples", "http", "static")
+	if abs, err := filepath.Abs(fallback); err == nil {
+		fallback = abs
+	}
+	if info, err := os.Stat(fallback); err == nil && info.IsDir() {
+		return fallback
+	}
+	return staticDir
 }
 
 func getEnv(key, fallback string) string {
