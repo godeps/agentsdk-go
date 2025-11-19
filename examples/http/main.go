@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cexll/agentsdk-go/pkg/api"
+	"github.com/cexll/agentsdk-go/pkg/middleware"
 	modelpkg "github.com/cexll/agentsdk-go/pkg/model"
 )
 
@@ -21,16 +22,12 @@ const (
 	defaultModel       = "claude-3-5-sonnet-20241022"
 	defaultRunTimeout  = 45 * time.Second
 	defaultMaxSessions = 500
-	minimalConfig      = "version: v0.0.1\ndescription: agentsdk-go CLI example\nenvironment: {}\n"
 )
 
 func main() {
-	projectRoot, cleanup, err := resolveProjectRoot()
+	projectRoot, err := resolveProjectRoot()
 	if err != nil {
 		log.Fatalf("init project root: %v", err)
-	}
-	if cleanup != nil {
-		defer cleanup()
 	}
 
 	addr := getEnv("AGENTSDK_HTTP_ADDR", defaultAddr)
@@ -47,12 +44,20 @@ func main() {
 		},
 	}
 
+	staticDir := filepath.Join(filepath.Dir(os.Args[0]), "static")
+	handler, srv, traceMW, traceDir := buildMux(mode, defaultTimeout, staticDir, projectRoot)
+	sessionMW := newSessionStateMiddleware()
+
 	opts := api.Options{
 		EntryPoint:   api.EntryPointPlatform,
 		ProjectRoot:  projectRoot,
 		Mode:         mode,
 		ModelFactory: &modelpkg.AnthropicProvider{ModelName: modelName},
 		MaxSessions:  maxSessions,
+		Middleware: []middleware.Middleware{
+			sessionMW,
+			traceMW,
+		},
 	}
 
 	rt, err := api.New(context.Background(), opts)
@@ -60,12 +65,13 @@ func main() {
 		log.Fatalf("build runtime: %v", err)
 	}
 	defer rt.Close()
+	srv.runtime = rt
 
-	staticDir := filepath.Join(filepath.Dir(os.Args[0]), "static")
+	log.Printf("Trace middleware enabled, writing traces to %s", traceDir)
 
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           buildMux(rt, mode, defaultTimeout, staticDir),
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
@@ -89,17 +95,28 @@ func main() {
 	log.Println("server exited cleanly")
 }
 
-func buildMux(rt *api.Runtime, mode api.ModeContext, defaultTimeout time.Duration, staticDir string) *http.ServeMux {
+func buildMux(mode api.ModeContext, defaultTimeout time.Duration, staticDir, projectRoot string) (http.Handler, *httpServer, middleware.Middleware, string) {
 	resolvedStaticDir := resolveStaticDir(staticDir)
+	log.Printf("Using static directory: %s", resolvedStaticDir)
 	srv := &httpServer{
-		runtime:        rt,
 		mode:           mode,
 		defaultTimeout: defaultTimeout,
 		staticDir:      resolvedStaticDir,
 	}
 	mux := http.NewServeMux()
 	srv.registerRoutes(mux)
-	return mux
+	traceDir := filepath.Join(projectRoot, ".trace")
+	traceMW := middleware.NewTraceMiddleware(traceDir)
+	handler := http.Handler(mux)
+	httpTraceDir := filepath.Join(projectRoot, ".claude-trace")
+	if httpTraceWriter, err := middleware.NewFileHTTPTraceWriter(httpTraceDir); err != nil {
+		log.Printf("HTTP trace disabled: %v", err)
+	} else {
+		httpTraceMW := middleware.NewHTTPTraceMiddleware(httpTraceWriter)
+		handler = httpTraceMW.Wrap(mux)
+		log.Printf("HTTP trace middleware enabled, writing HTTP traces to %s", httpTraceWriter.Path())
+	}
+	return handler, srv, traceMW, traceDir
 }
 
 // 静态目录优先使用二进制同级目录，不存在则退回源码路径
@@ -113,6 +130,14 @@ func resolveStaticDir(staticDir string) string {
 	if info, err := os.Stat(staticDir); err == nil && info.IsDir() {
 		return staticDir
 	}
+	// 优先尝试当前工作目录的 static
+	if cwd, err := os.Getwd(); err == nil {
+		cwdStatic := filepath.Join(cwd, "static")
+		if info, err := os.Stat(cwdStatic); err == nil && info.IsDir() {
+			return cwdStatic
+		}
+	}
+	// 回退到项目根目录下的 examples/http/static
 	fallback := filepath.Join("examples", "http", "static")
 	if abs, err := filepath.Abs(fallback); err == nil {
 		fallback = abs
@@ -120,6 +145,7 @@ func resolveStaticDir(staticDir string) string {
 	if info, err := os.Stat(fallback); err == nil && info.IsDir() {
 		return fallback
 	}
+	log.Printf("WARNING: static directory not found, using: %s", staticDir)
 	return staticDir
 }
 
@@ -156,32 +182,46 @@ func getDuration(key string, fallback time.Duration) time.Duration {
 	return fallback
 }
 
-func resolveProjectRoot() (string, func(), error) {
+func resolveProjectRoot() (string, error) {
+	// 优先使用显式指定的项目根目录，便于容器或 CI 注入路径
 	if root := strings.TrimSpace(os.Getenv("AGENTSDK_PROJECT_ROOT")); root != "" {
-		return root, nil, nil
+		return root, nil
 	}
-	tmp, err := os.MkdirTemp("", "agentsdk-http-*")
-	if err != nil {
-		return "", nil, err
-	}
-	cleanup := func() { _ = os.RemoveAll(tmp) }
-	if err := scaffoldMinimalConfig(tmp); err != nil {
-		cleanup()
-		return "", nil, err
-	}
-	return tmp, cleanup, nil
+
+	// 回退到 SDK 自带的智能解析逻辑，确保返回真实项目目录
+	return api.ResolveProjectRoot()
 }
 
-func scaffoldMinimalConfig(root string) error {
-	claudeDir := filepath.Join(root, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		return err
+func newSessionStateMiddleware() middleware.Middleware {
+	return middleware.Funcs{
+		Identifier: "session-state",
+		OnBeforeAgent: func(ctx context.Context, st *middleware.State) error {
+			if st == nil {
+				return nil
+			}
+			id := sessionIDFromContext(ctx)
+			if id == "" {
+				return nil
+			}
+			if st.Values == nil {
+				st.Values = map[string]any{}
+			}
+			st.Values["trace.session_id"] = id
+			st.Values["session_id"] = id
+			return nil
+		},
 	}
-	configPath := filepath.Join(claudeDir, "config.yaml")
-	if _, err := os.Stat(configPath); err == nil {
-		return nil
-	} else if !os.IsNotExist(err) {
-		return err
+}
+
+func sessionIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
 	}
-	return os.WriteFile(configPath, []byte(minimalConfig), 0o644)
+	if id, _ := ctx.Value("trace.session_id").(string); strings.TrimSpace(id) != "" {
+		return strings.TrimSpace(id)
+	}
+	if id, _ := ctx.Value("session_id").(string); strings.TrimSpace(id) != "" {
+		return strings.TrimSpace(id)
+	}
+	return ""
 }

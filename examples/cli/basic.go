@@ -10,15 +10,22 @@ import (
 	"strings"
 
 	"github.com/cexll/agentsdk-go/pkg/api"
+	"github.com/cexll/agentsdk-go/pkg/middleware"
 	modelpkg "github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/google/uuid"
 )
 
 // 交互式 REPL 示例，复用固定会话 ID 保持历史。
 func main() {
 	provider := &modelpkg.AnthropicProvider{ModelName: "claude-sonnet-4-5-20250929"}
+
+	// 创建 debug middleware
+	traceMW := middleware.NewTraceMiddleware(".trace")
+
 	rt, err := api.New(context.Background(), api.Options{
 		EntryPoint:   api.EntryPointCLI,
 		ModelFactory: provider,
+		Middleware:   []middleware.Middleware{traceMW},
 	})
 	if err != nil {
 		log.Fatalf("build runtime: %v", err)
@@ -41,7 +48,7 @@ func main() {
 
 		req := api.Request{
 			Prompt:    line,
-			SessionID: "repl-session",
+			SessionID: uuid.NewString(),
 			Mode: api.ModeContext{
 				EntryPoint: api.EntryPointCLI,
 				CLI:        &api.CLIContext{User: os.Getenv("USER")},

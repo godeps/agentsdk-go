@@ -77,8 +77,10 @@ func (s *httpServer) handleRun(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, errorResponse{"prompt is required"})
 		return
 	}
+	sessionID := req.ensureSessionID(s.mode.EntryPoint)
 
-	ctx, cancel := s.requestContext(r.Context(), req.TimeoutMs)
+	baseCtx := s.withSessionContext(r.Context(), sessionID)
+	ctx, cancel := s.requestContext(baseCtx, req.TimeoutMs)
 	defer cancel()
 
 	resp, err := s.runtime.Run(ctx, req.toAPIRequest(s.mode))
@@ -86,7 +88,7 @@ func (s *httpServer) handleRun(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadGateway, errorResponse{err.Error()})
 		return
 	}
-	payload, err := buildRunResponse(resp, req.SessionID)
+	payload, err := buildRunResponse(resp, sessionID)
 	if err != nil {
 		s.writeJSON(w, http.StatusInternalServerError, errorResponse{err.Error()})
 		return
@@ -108,6 +110,7 @@ func (s *httpServer) handleStream(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusBadRequest, errorResponse{"prompt is required"})
 		return
 	}
+	sessionID := req.ensureSessionID(s.mode.EntryPoint)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -115,7 +118,8 @@ func (s *httpServer) handleStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := s.requestContext(r.Context(), req.TimeoutMs)
+	baseCtx := s.withSessionContext(r.Context(), sessionID)
+	ctx, cancel := s.requestContext(baseCtx, req.TimeoutMs)
 	defer cancel()
 
 	events, err := s.runtime.RunStream(ctx, req.toAPIRequest(s.mode))
@@ -189,6 +193,15 @@ func (s *httpServer) writeJSON(w http.ResponseWriter, status int, payload any) {
 	_ = json.NewEncoder(w).Encode(payload)
 }
 
+func (s *httpServer) withSessionContext(ctx context.Context, sessionID string) context.Context {
+	id := strings.TrimSpace(sessionID)
+	if id == "" {
+		return ctx
+	}
+	ctx = context.WithValue(ctx, "trace.session_id", id)
+	return context.WithValue(ctx, "session_id", id)
+}
+
 type runRequest struct {
 	Prompt        string            `json:"prompt"`
 	SessionID     string            `json:"session_id"`
@@ -201,6 +214,9 @@ type runRequest struct {
 }
 
 func (r runRequest) toAPIRequest(base api.ModeContext) api.Request {
+	// 智能增强提示词，避免模型返回空参数
+	// enhancedPrompt := enhancePrompt(r.Prompt)
+
 	req := api.Request{
 		Prompt:        r.Prompt,
 		SessionID:     r.SessionID,
@@ -212,6 +228,22 @@ func (r runRequest) toAPIRequest(base api.ModeContext) api.Request {
 	}
 	req.Mode = base
 	return req
+}
+
+func (r *runRequest) ensureSessionID(entry api.EntryPoint) string {
+	if r == nil {
+		return ""
+	}
+	id := strings.TrimSpace(r.SessionID)
+	if id == "" {
+		prefix := strings.TrimSpace(string(entry))
+		if prefix == "" {
+			prefix = string(api.EntryPointCLI)
+		}
+		id = fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
+	}
+	r.SessionID = id
+	return r.SessionID
 }
 
 type runResponse struct {
