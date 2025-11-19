@@ -157,7 +157,8 @@ func (m *TraceMiddleware) newSessionLocked(id string) (*traceSession, error) {
 		return nil, err
 	}
 	timestamp := m.now().UTC().Format(time.RFC3339)
-	base := fmt.Sprintf("log-%s", timestamp)
+	safeID := sanitizeSessionComponent(id)
+	base := fmt.Sprintf("log-%s", safeID)
 	jsonPath := filepath.Join(m.outputDir, base+".jsonl")
 	htmlPath := filepath.Join(m.outputDir, base+".html")
 	file, err := os.OpenFile(jsonPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -175,6 +176,31 @@ func (m *TraceMiddleware) newSessionLocked(id string) (*traceSession, error) {
 		updatedAt: now,
 		events:    []TraceEvent{},
 	}, nil
+}
+
+func sanitizeSessionComponent(id string) string {
+	const fallback = "session"
+	if strings.TrimSpace(id) == "" {
+		return fallback
+	}
+	var b strings.Builder
+	b.Grow(len(id))
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z',
+			r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9',
+			r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	sanitized := strings.Trim(b.String(), "-")
+	if sanitized == "" {
+		return fallback
+	}
+	return sanitized
 }
 
 func (sess *traceSession) append(evt TraceEvent, owner *TraceMiddleware) {

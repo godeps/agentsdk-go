@@ -528,6 +528,71 @@ func TestTraceMiddlewareSessionIsolation(t *testing.T) {
 	assertHTMLContains(t, htmlB, "session-ctx")
 }
 
+func TestTraceMiddlewareSameSessionMultipleWrites(t *testing.T) {
+	mw := newTraceMiddlewareForTest(t)
+	sessionID := "same-session"
+
+	for i := 1; i <= 3; i++ {
+		st := &State{
+			Iteration:   i,
+			Agent:       fmt.Sprintf("agent-%d", i),
+			Values:      map[string]any{"trace.session_id": sessionID},
+			ModelOutput: fmt.Sprintf("output-%d", i),
+		}
+		if err := mw.AfterAgent(context.Background(), st); err != nil {
+			t.Fatalf("after_agent iteration %d: %v", i, err)
+		}
+	}
+
+	sess := getSession(t, mw, sessionID)
+	jsonPath, htmlPath, events := snapshotSession(t, sess)
+	if len(events) != 3 {
+		t.Fatalf("expected 3 events, got %d", len(events))
+	}
+	for idx, evt := range events {
+		if evt.SessionID != sessionID {
+			t.Fatalf("event %d session mismatch: %s", idx, evt.SessionID)
+		}
+	}
+
+	entries, err := os.ReadDir(filepath.Dir(jsonPath))
+	if err != nil {
+		t.Fatalf("readdir %s: %v", filepath.Dir(jsonPath), err)
+	}
+	var jsonCount, htmlCount int
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		switch {
+		case strings.HasSuffix(entry.Name(), ".jsonl"):
+			jsonCount++
+		case strings.HasSuffix(entry.Name(), ".html"):
+			htmlCount++
+		}
+	}
+	if jsonCount != 1 {
+		t.Fatalf("expected 1 jsonl file, got %d", jsonCount)
+	}
+	if htmlCount != 1 {
+		t.Fatalf("expected 1 html file, got %d", htmlCount)
+	}
+	if base := filepath.Base(jsonPath); !strings.Contains(base, sessionID) {
+		t.Fatalf("jsonl filename should contain session id")
+	}
+	if base := filepath.Base(htmlPath); !strings.Contains(base, sessionID) {
+		t.Fatalf("html filename should contain session id")
+	}
+
+	fileEvents := assertJSONLValid(t, jsonPath, 3)
+	for idx, evt := range fileEvents {
+		if session, _ := evt["session_id"].(string); session != sessionID {
+			t.Fatalf("json event %d session mismatch: %v", idx, evt["session_id"])
+		}
+	}
+	assertHTMLContains(t, htmlPath, sessionID)
+}
+
 func TestTraceMiddlewareAppendHandlesErrors(t *testing.T) {
 	mw := newTraceMiddlewareForTest(t)
 	sess := mw.sessionFor("append-error")
