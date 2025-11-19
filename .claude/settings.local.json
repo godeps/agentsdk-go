@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Skill(codex)",
+      "Bash(uv run:*)",
+      "Bash(git add:*)",
+      "Bash(git rm:*)",
+      "Bash(git commit:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
