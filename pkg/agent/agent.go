@@ -6,7 +6,12 @@ import (
 	"fmt"
 
 	"github.com/cexll/agentsdk-go/pkg/middleware"
+	"github.com/cexll/agentsdk-go/pkg/model"
 )
+
+type contextKey string
+
+const middlewareStateKey contextKey = "agentsdk.middleware.state"
 
 var (
 	ErrMaxIterations = errors.New("max iterations reached")
@@ -89,6 +94,7 @@ func (a *Agent) Run(ctx context.Context, c *Context) (*ModelOutput, error) {
 		Agent:  c,
 		Values: map[string]any{},
 	}
+	ctx = context.WithValue(ctx, model.MiddlewareStateKey, state)
 
 	if err := a.mw.Execute(ctx, middleware.StageBeforeAgent, state); err != nil {
 		return nil, err
@@ -112,7 +118,9 @@ func (a *Agent) Run(ctx context.Context, c *Context) (*ModelOutput, error) {
 			return last, err
 		}
 
-		out, err := a.model.Generate(ctx, c)
+		// Inject middleware state into context so model can populate ModelInput/ModelOutput
+		modelCtx := context.WithValue(ctx, middlewareStateKey, state)
+		out, err := a.model.Generate(modelCtx, c)
 		if err != nil {
 			return last, err
 		}

@@ -28,6 +28,10 @@ import (
 	toolbuiltin "github.com/cexll/agentsdk-go/pkg/tool/builtin"
 )
 
+type contextKey string
+
+const middlewareStateKey contextKey = "agentsdk.middleware.state"
+
 // Runtime exposes the unified SDK surface that powers CLI/CI/enterprise entrypoints.
 type Runtime struct {
 	opts      Options
@@ -78,18 +82,6 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	opts.Model = mdl
 
 	sbox, sbRoot := buildSandboxManager(opts, cfg)
-	registry := tool.NewRegistry()
-	if err := registerTools(registry, opts, cfg); err != nil {
-		return nil, err
-	}
-	if err := registerMCPServers(registry, sbox, opts.MCPServers); err != nil {
-		return nil, err
-	}
-	executor := tool.NewExecutor(registry, sbox)
-
-	recorder := defaultHookRecorder()
-	hooks := newHookExecutor(opts, recorder)
-
 	skReg, err := registerSkills(opts.Skills)
 	if err != nil {
 		return nil, err
@@ -102,6 +94,17 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	if err != nil {
 		return nil, err
 	}
+	registry := tool.NewRegistry()
+	if err := registerTools(registry, opts, cfg, skReg, cmdExec); err != nil {
+		return nil, err
+	}
+	if err := registerMCPServers(registry, sbox, opts.MCPServers); err != nil {
+		return nil, err
+	}
+	executor := tool.NewExecutor(registry, sbox)
+
+	recorder := defaultHookRecorder()
+	hooks := newHookExecutor(opts, recorder)
 
 	return &Runtime{
 		opts:      opts,
@@ -497,12 +500,33 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 		Model:       "",
 		Temperature: nil,
 	}
+
+	// Populate middleware state with model request if available
+	if st, ok := ctx.Value(middlewareStateKey).(*middleware.State); ok && st != nil {
+		st.ModelInput = req
+		if st.Values == nil {
+			st.Values = map[string]any{}
+		}
+		st.Values["model.request"] = req
+	}
+
 	resp, err := m.base.Complete(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	m.usage = resp.Usage
 	m.stopReason = resp.StopReason
+
+	// Populate middleware state with model response and usage
+	if st, ok := ctx.Value(middlewareStateKey).(*middleware.State); ok && st != nil {
+		st.ModelOutput = resp
+		if st.Values == nil {
+			st.Values = map[string]any{}
+		}
+		st.Values["model.response"] = resp
+		st.Values["model.usage"] = resp.Usage
+		st.Values["model.stop_reason"] = resp.StopReason
+	}
 
 	assistant := message.Message{Role: resp.Message.Role, Content: strings.TrimSpace(resp.Message.Content)}
 	if len(resp.Message.ToolCalls) > 0 {
@@ -653,7 +677,7 @@ func buildSandboxManager(opts Options, cfg *config.ProjectConfig) (*sandbox.Mana
 	return sandbox.NewManager(fs, nw, sandbox.NewResourceLimiter(opts.Sandbox.ResourceLimit)), root
 }
 
-func registerTools(registry *tool.Registry, opts Options, cfg *config.ProjectConfig) error {
+func registerTools(registry *tool.Registry, opts Options, cfg *config.ProjectConfig, skReg *skills.Registry, cmdExec *commands.Executor) error {
 	tools := opts.Tools
 	if len(tools) == 0 {
 		bashTool := toolbuiltin.NewBashToolWithRoot(opts.ProjectRoot)
@@ -661,9 +685,23 @@ func registerTools(registry *tool.Registry, opts Options, cfg *config.ProjectCon
 		if opts.EntryPoint == EntryPointCLI {
 			bashTool.AllowShellMetachars(true)
 		}
+		if skReg == nil {
+			skReg = skills.NewRegistry()
+		}
+		if cmdExec == nil {
+			cmdExec = commands.NewExecutor()
+		}
 		tools = []tool.Tool{
 			bashTool,
-			toolbuiltin.NewFileToolWithRoot(opts.ProjectRoot),
+			toolbuiltin.NewReadToolWithRoot(opts.ProjectRoot),
+			toolbuiltin.NewWriteToolWithRoot(opts.ProjectRoot),
+			toolbuiltin.NewEditToolWithRoot(opts.ProjectRoot),
+			toolbuiltin.NewWebFetchTool(nil),
+			toolbuiltin.NewWebSearchTool(nil),
+			toolbuiltin.NewBashOutputTool(nil),
+			toolbuiltin.NewTodoWriteTool(),
+			toolbuiltin.NewSkillTool(skReg, nil),
+			toolbuiltin.NewSlashCommandTool(cmdExec),
 			toolbuiltin.NewGrepToolWithRoot(opts.ProjectRoot),
 			toolbuiltin.NewGlobToolWithRoot(opts.ProjectRoot),
 		}
@@ -814,9 +852,6 @@ func cloneArguments(args map[string]any) map[string]any {
 }
 
 func registerSkills(registrations []SkillRegistration) (*skills.Registry, error) {
-	if len(registrations) == 0 {
-		return nil, nil
-	}
 	reg := skills.NewRegistry()
 	for _, entry := range registrations {
 		if entry.Handler == nil {
@@ -830,9 +865,6 @@ func registerSkills(registrations []SkillRegistration) (*skills.Registry, error)
 }
 
 func registerCommands(registrations []CommandRegistration) (*commands.Executor, error) {
-	if len(registrations) == 0 {
-		return nil, nil
-	}
 	exec := commands.NewExecutor()
 	for _, entry := range registrations {
 		if entry.Handler == nil {

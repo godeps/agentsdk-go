@@ -18,7 +18,11 @@ func (e progressEmitter) emit(evt StreamEvent) {
 	if e.ch == nil {
 		return
 	}
-	e.ch <- evt
+	// 非阻塞发送避免前端消费慢时阻塞整个 agent 流程
+	select {
+	case e.ch <- evt:
+	default:
+	}
 }
 
 // newProgressMiddleware surfaces Anthropic-compatible SSE progress events at

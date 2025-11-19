@@ -129,16 +129,24 @@ func TestBuildSandboxManager(t *testing.T) {
 func TestRegisterToolsUsesDefaultImplementations(t *testing.T) {
 	registry := tool.NewRegistry()
 	opts := Options{ProjectRoot: t.TempDir()}
-	if err := registerTools(registry, opts, &config.ProjectConfig{}); err != nil {
+	if err := registerTools(registry, opts, &config.ProjectConfig{}, nil, nil); err != nil {
 		t.Fatalf("register tools: %v", err)
 	}
 	tools := registry.List()
-	if len(tools) != 4 {
-		t.Fatalf("expected four default tools (Bash, File, Grep, Glob), got %d", len(tools))
+	expected := []string{"Bash", "Read", "Write", "Edit", "WebFetch", "WebSearch", "BashOutput", "TodoWrite", "Skill", "SlashCommand", "Grep", "Glob"}
+	if len(tools) != len(expected) {
+		t.Fatalf("expected %d default tools, got %d", len(expected), len(tools))
 	}
+	seen := map[string]struct{}{}
 	for _, impl := range tools {
 		if strings.TrimSpace(impl.Name()) == "" {
 			t.Fatalf("tool missing name: %+v", impl)
+		}
+		seen[impl.Name()] = struct{}{}
+	}
+	for _, name := range expected {
+		if _, ok := seen[name]; !ok {
+			t.Fatalf("missing default tool %s", name)
 		}
 	}
 }
@@ -146,7 +154,7 @@ func TestRegisterToolsUsesDefaultImplementations(t *testing.T) {
 func TestRegisterToolsSkipsNilEntries(t *testing.T) {
 	registry := tool.NewRegistry()
 	opts := Options{ProjectRoot: t.TempDir(), Tools: []tool.Tool{nil, &echoTool{}}}
-	if err := registerTools(registry, opts, &config.ProjectConfig{}); err != nil {
+	if err := registerTools(registry, opts, &config.ProjectConfig{}, nil, nil); err != nil {
 		t.Fatalf("register tools: %v", err)
 	}
 	tools := registry.List()

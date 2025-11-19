@@ -20,6 +20,159 @@ import (
 const (
 	defaultBashTimeout = 30 * time.Second
 	maxBashTimeout     = 2 * time.Minute
+	bashDescript = `
+	# Bash Tool Documentation
+
+	Executes bash commands in a persistent shell session with optional timeout, ensuring proper handling and security measures.
+
+	**IMPORTANT**: This tool is for terminal operations like git, npm, docker, etc. DO NOT use it for file operations (reading, writing, editing, searching, finding files) - use specialized tools instead.
+
+	## Pre-Execution Steps
+
+	### 1. Directory Verification
+	- If creating new directories/files, first use 'ls' to verify the parent directory exists
+	- Example: Before 'mkdir foo/bar', run 'ls foo' to check "foo" exists
+
+	### 2. Command Execution
+	- Always quote file paths with spaces using double quotes
+	- Examples:
+	- ✅ 'cd "/Users/name/My Documents"'
+	- ❌ 'cd /Users/name/My Documents'
+	- ✅ 'python "/path/with spaces/script.py"'
+	- ❌ 'python /path/with spaces/script.py'
+
+	## Usage Notes
+
+	- **Required**: command argument
+	- **Optional**: timeout in milliseconds (max 600000ms/10 min, default 120000ms/2 min)
+	- **Description**: Write clear 5-10 word description of command purpose
+	- **Output limit**: Truncated if exceeds 30000 characters
+	- **Background execution**: Use 'run_in_background' parameter (no need for '&')
+
+	## Command Preferences
+
+	Avoid using Bash for these operations - use dedicated tools instead:
+	- File search → Use **Glob** (NOT find/ls)
+	- Content search → Use **Grep** (NOT grep/rg)
+	- Read files → Use **Read** (NOT cat/head/tail)
+	- Edit files → Use **Edit** (NOT sed/awk)
+	- Write files → Use **Write** (NOT echo >/cat <<EOF)
+	- Communication → Output text directly (NOT echo/printf)
+
+	## Multiple Commands
+
+	- **Parallel (independent)**: Make multiple Bash tool calls in single message
+	- **Sequential (dependent)**: Chain with '&&' (e.g., 'git add . && git commit -m "message" && git push')
+	- **Sequential (ignore failures)**: Use ';'
+	- **DO NOT**: Use newlines to separate commands (except in quoted strings)
+
+	## Working Directory
+
+	Maintain current directory by using absolute paths and avoiding 'cd':
+	- ✅ 'pytest /foo/bar/tests'
+	- ❌ 'cd /foo/bar && pytest tests'
+
+	---
+
+	## Git Commit Protocol
+
+	**Only create commits when explicitly requested by user.**
+
+	### Git Safety Rules
+	- ❌ NEVER update git config
+	- ❌ NEVER run destructive commands (push --force, hard reset) unless explicitly requested
+	- ❌ NEVER skip hooks (--no-verify, --no-gpg-sign) unless explicitly requested
+	- ❌ NEVER force push to main/master (warn user if requested)
+	- ⚠️ Avoid 'git commit --amend' (only use when: user explicitly requests OR adding pre-commit hook edits)
+	- ✅ Before amending: ALWAYS check authorship ('git log -1 --format='%an %ae'')
+	- ⚠️ NEVER commit unless explicitly asked
+
+	### Commit Steps
+
+	**1. Gather information (parallel)**
+	'''bash
+	git status
+	git diff
+	git log
+	'''
+
+	**2. Analyze and draft**
+	- Summarize change nature (feature/enhancement/fix/refactor/test/docs)
+	- Don't commit secret files (.env, credentials.json) - warn user
+	- Draft concise 1-2 sentence message focusing on "why" not "what"
+
+	**3. Execute commit (sequential where needed)**
+	'''bash
+	git add [files]
+	git commit -m "$(cat <<'EOF'
+	Commit message here.
+	EOF
+	)"
+	git status  # Verify success
+	'''
+
+	**4. Handle pre-commit hook failures**
+	- Retry ONCE if commit fails
+	- If files modified by hook, verify safe to amend:
+	- Check authorship: 'git log -1 --format='%an %ae''
+	- Check not pushed: 'git status' shows "Your branch is ahead"
+	- If both true → amend; otherwise → create NEW commit
+
+	### Important Notes
+	- ❌ NEVER run additional code exploration commands
+	- ❌ NEVER use TodoWrite or Task tools
+	- ❌ DO NOT push unless explicitly asked
+	- ❌ NEVER use '-i' flag (interactive not supported)
+	- ⚠️ Don't create empty commits if no changes
+	- ✅ ALWAYS use HEREDOC for commit messages
+
+	---
+
+	## Pull Request Protocol
+
+	Use 'gh' command via Bash tool for ALL GitHub tasks (issues, PRs, checks, releases).
+
+	### PR Creation Steps
+
+	**1. Understand branch state (parallel)**
+	'''bash
+	git status
+	git diff
+	git log
+	git diff [base-branch]...HEAD
+	'''
+	Check if branch tracks remote and is up to date.
+
+	**2. Analyze and draft**
+	Review ALL commits (not just latest) that will be included in PR.
+
+	**3. Create PR (parallel where possible)**
+	'''bash
+	# Create branch if needed
+	# Push with -u flag if needed
+	gh pr create --title "the pr title" --body "$(cat <<'EOF'
+	## Summary
+	<1-3 bullet points>
+
+	## Test plan
+	[Bulleted markdown checklist of TODOs for testing the pull request...]
+	EOF
+	)"
+	'''
+
+	### Important Notes
+	- ❌ DO NOT use TodoWrite or Task tools
+	- ✅ Return PR URL when done
+
+	---
+
+	## Other Common Operations
+
+	**View PR comments:**
+	'''bash
+	gh api repos/foo/bar/pulls/123/comments
+	'''
+	`
 )
 
 var bashSchema = &tool.JSONSchema{
@@ -70,7 +223,7 @@ func (b *BashTool) AllowShellMetachars(allow bool) {
 	}
 }
 
-func (b *BashTool) Name() string { return "bash_execute" }
+func (b *BashTool) Name() string { return "Bash" }
 
 func (b *BashTool) Description() string {
 	return "Execute validated bash commands inside the agent workspace."
@@ -197,7 +350,15 @@ func extractCommand(params map[string]interface{}) (string, error) {
 	}
 	raw, ok := params["command"]
 	if !ok {
-		return "", errors.New("command is required")
+		// 提供更详细的错误信息帮助调试
+		keys := make([]string, 0, len(params))
+		for k := range params {
+			keys = append(keys, k)
+		}
+		if len(keys) == 0 {
+			return "", errors.New("command is required (params is empty)")
+		}
+		return "", fmt.Errorf("command is required (got params with keys: %v)", keys)
 	}
 	cmd, err := coerceString(raw)
 	if err != nil {

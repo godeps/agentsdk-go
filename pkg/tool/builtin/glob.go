@@ -52,7 +52,7 @@ func NewGlobToolWithRoot(root string) *GlobTool {
 	}
 }
 
-func (g *GlobTool) Name() string { return "glob" }
+func (g *GlobTool) Name() string { return "Glob" }
 
 func (g *GlobTool) Description() string { return globToolDesc }
 

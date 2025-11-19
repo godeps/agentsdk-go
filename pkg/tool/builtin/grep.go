@@ -78,7 +78,7 @@ func NewGrepToolWithRoot(root string) *GrepTool {
 	}
 }
 
-func (g *GrepTool) Name() string { return "grep" }
+func (g *GrepTool) Name() string { return "Grep" }
 
 func (g *GrepTool) Description() string { return grepToolDesc }
 
@@ -255,7 +255,7 @@ func (g *GrepTool) searchFile(ctx context.Context, path string, re *regexp.Regex
 	if err != nil {
 		return false, fmt.Errorf("read file: %w", err)
 	}
-	lines := splitLines(string(data))
+	lines := splitGrepLines(string(data))
 	display := displayPath(path, g.root)
 	for idx, line := range lines {
 		if !re.MatchString(line) {
@@ -297,7 +297,10 @@ func relativeDepth(base, target string) int {
 	return len(strings.Split(rel, string(filepath.Separator)))
 }
 
-func splitLines(contents string) []string {
+func splitGrepLines(contents string) []string {
+	if contents == "" {
+		return nil
+	}
 	lines := strings.Split(contents, "\n")
 	for i := range lines {
 		lines[i] = strings.TrimRight(lines[i], "\r")

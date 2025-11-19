@@ -252,8 +252,11 @@ func TestRegisterSkillsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if reg != nil {
-		t.Fatalf("expected nil registry, got %#v", reg)
+	if reg == nil {
+		t.Fatal("expected registry instance")
+	}
+	if _, ok := reg.Get("missing"); ok {
+		t.Fatalf("expected no skills to be registered")
 	}
 }
 
@@ -281,8 +284,11 @@ func TestRegisterCommandsEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if exec != nil {
-		t.Fatalf("expected nil executor, got %#v", exec)
+	if exec == nil {
+		t.Fatal("expected executor instance")
+	}
+	if _, err := exec.Execute(context.Background(), []commands.Invocation{{Name: "missing"}}); !errors.Is(err, commands.ErrUnknownCommand) {
+		t.Fatalf("expected unknown command error, got %v", err)
 	}
 }
 
