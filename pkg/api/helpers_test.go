@@ -111,14 +111,40 @@ func TestSnapshotSandboxEmpty(t *testing.T) {
 }
 
 func TestBuildSandboxManager(t *testing.T) {
-	cfg := &config.ProjectConfig{Sandbox: config.SandboxBlock{AllowedPaths: []string{"workspace"}}}
-	opts := Options{ProjectRoot: t.TempDir(), Sandbox: SandboxOptions{AllowedPaths: []string{"extra"}, ResourceLimit: sandbox.ResourceLimits{MaxCPUPercent: 10}}}
-	mgr, root := buildSandboxManager(opts, cfg)
-	if root == "" {
+	root := t.TempDir()
+	extra := filepath.Join(root, "workspace")
+	settings := &config.Settings{Permissions: &config.PermissionsConfig{AdditionalDirectories: []string{extra}}}
+	allowed := filepath.Join(root, "extra")
+	if err := os.MkdirAll(extra, 0o755); err != nil {
+		t.Fatalf("extra dir: %v", err)
+	}
+	if err := os.MkdirAll(allowed, 0o755); err != nil {
+		t.Fatalf("allowed dir: %v", err)
+	}
+	opts := Options{ProjectRoot: root, Sandbox: SandboxOptions{AllowedPaths: []string{allowed}, ResourceLimit: sandbox.ResourceLimits{MaxCPUPercent: 10}}}
+	mgr, sbRoot := buildSandboxManager(opts, settings)
+	if sbRoot == "" {
 		t.Fatal("expected non-empty root")
 	}
-	if err := mgr.CheckPath("workspace/file"); err != nil {
+	resolvedExtra, err := filepath.EvalSymlinks(extra)
+	if err != nil {
+		t.Fatalf("eval workspace symlink: %v", err)
+	}
+	if resolvedExtra == "" {
+		resolvedExtra = extra
+	}
+	if err := mgr.CheckPath(filepath.Join(resolvedExtra, "file")); err != nil {
 		t.Fatalf("expected workspace allowed: %v", err)
+	}
+	resolvedAllowed, err := filepath.EvalSymlinks(allowed)
+	if err != nil {
+		t.Fatalf("eval allowed symlink: %v", err)
+	}
+	if resolvedAllowed == "" {
+		resolvedAllowed = allowed
+	}
+	if err := mgr.CheckPath(filepath.Join(resolvedAllowed, "child")); err != nil {
+		t.Fatalf("expected allowed path honored: %v", err)
 	}
 	limits := mgr.Limits()
 	if limits.MaxCPUPercent != 10 {
@@ -126,10 +152,50 @@ func TestBuildSandboxManager(t *testing.T) {
 	}
 }
 
+func TestLoadSettingsAppliesOverrides(t *testing.T) {
+	root := t.TempDir()
+	settingsPath := filepath.Join(root, "settings.json")
+	payload := `{"model":"claude-foo","permissions":{"additionalDirectories":["/tmp"]}}`
+	if err := os.WriteFile(settingsPath, []byte(payload), 0o600); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+	override := &config.Settings{Model: "override-model"}
+	opts := Options{ProjectRoot: root, SettingsPath: settingsPath, SettingsOverrides: override}
+	settings, err := loadSettings(opts)
+	if err != nil {
+		t.Fatalf("load settings: %v", err)
+	}
+	if settings.Model != "override-model" {
+		t.Fatalf("expected override to win, got %s", settings.Model)
+	}
+	if settings.Permissions == nil || len(settings.Permissions.AdditionalDirectories) == 0 {
+		t.Fatalf("expected permissions from file, got %+v", settings.Permissions)
+	}
+}
+
+func TestProjectConfigFromSettings(t *testing.T) {
+	settings := &config.Settings{
+		Env: map[string]string{"K": "V"},
+		Permissions: &config.PermissionsConfig{
+			AdditionalDirectories: []string{"/data"},
+		},
+	}
+	cfg := projectConfigFromSettings(settings)
+	if cfg == nil {
+		t.Fatal("expected config snapshot")
+	}
+	if cfg.Env["K"] != "V" {
+		t.Fatalf("env not propagated: %+v", cfg.Env)
+	}
+	if cfg.Permissions == nil || len(cfg.Permissions.AdditionalDirectories) != 1 || cfg.Permissions.AdditionalDirectories[0] != "/data" {
+		t.Fatalf("permissions not propagated: %+v", cfg.Permissions)
+	}
+}
+
 func TestRegisterToolsUsesDefaultImplementations(t *testing.T) {
 	registry := tool.NewRegistry()
 	opts := Options{ProjectRoot: t.TempDir()}
-	if taskTool, err := registerTools(registry, opts, &config.ProjectConfig{}, nil, nil); err != nil {
+	if taskTool, err := registerTools(registry, opts, nil, nil); err != nil {
 		t.Fatalf("register tools: %v", err)
 		_ = taskTool
 	} else if taskTool == nil {
@@ -157,7 +223,7 @@ func TestRegisterToolsUsesDefaultImplementations(t *testing.T) {
 func TestRegisterToolsSkipsNilEntries(t *testing.T) {
 	registry := tool.NewRegistry()
 	opts := Options{ProjectRoot: t.TempDir(), Tools: []tool.Tool{nil, &echoTool{}}}
-	if taskTool, err := registerTools(registry, opts, &config.ProjectConfig{}, nil, nil); err != nil {
+	if taskTool, err := registerTools(registry, opts, nil, nil); err != nil {
 		t.Fatalf("register tools: %v", err)
 		_ = taskTool
 	} else if taskTool != nil {
@@ -166,90 +232,6 @@ func TestRegisterToolsSkipsNilEntries(t *testing.T) {
 	tools := registry.List()
 	if len(tools) != 1 || tools[0].Name() != "echo" {
 		t.Fatalf("expected only echo tool, got %+v", tools)
-	}
-}
-
-func TestCfgSandboxPathsNormalizes(t *testing.T) {
-	cfg := &config.ProjectConfig{Sandbox: config.SandboxBlock{AllowedPaths: []string{" ", "foo", " foo ", "bar"}}}
-	paths := cfgSandboxPaths(cfg)
-	if len(paths) != 2 || paths[0] != "bar" || paths[1] != "foo" {
-		t.Fatalf("unexpected normalized paths: %+v", paths)
-	}
-	if cfgSandboxPaths(nil) != nil {
-		t.Fatal("expected nil config to return nil slice")
-	}
-}
-
-func TestLoadProjectConfigHandlesMissingClaudeDir(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	root := t.TempDir()
-	loader, err := config.NewLoader(root)
-	if err != nil {
-		t.Fatalf("new loader: %v", err)
-	}
-	cfg, err := loadProjectConfig(loader)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	if cfg == nil {
-		t.Fatalf("expected fallback config")
-		return
-	}
-	if cfg.ClaudeDir != "" {
-		t.Fatalf("expected empty claude dir, got %q", cfg.ClaudeDir)
-	}
-	if cfg.Environment == nil || len(cfg.Environment) != 0 {
-		t.Fatalf("expected empty environment map, got %+v", cfg.Environment)
-	}
-}
-
-func TestLoadProjectConfigHandlesPluginManifestError(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	root := t.TempDir()
-	claude := writeClaudeConfig(t, root, "version: '1.0'\nplugins:\n  - name: broken\n")
-	brokenDir := filepath.Join(claude, "plugins", "broken")
-	if err := os.MkdirAll(brokenDir, 0o755); err != nil {
-		t.Fatalf("broken dir: %v", err)
-	}
-	loader, err := config.NewLoader(root)
-	if err != nil {
-		t.Fatalf("new loader: %v", err)
-	}
-	cfg, err := loadProjectConfig(loader)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	if cfg == nil {
-		t.Fatalf("expected fallback state, got nil")
-		return
-	}
-	if cfg.ClaudeDir != "" {
-		t.Fatalf("expected empty claude dir, got %+v", cfg)
-	}
-}
-
-func TestLoadProjectConfigHandlesInvalidPluginName(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	root := t.TempDir()
-	claude := writeClaudeConfig(t, root, "version: '1.0'\nplugins:\n  - name: bad\n")
-	pluginDir := filepath.Join(claude, "plugins", "bad")
-	if err := os.MkdirAll(pluginDir, 0o755); err != nil {
-		t.Fatalf("plugin dir: %v", err)
-	}
-	manifest := "name: BADNAME\n"
-	if err := os.WriteFile(filepath.Join(pluginDir, "manifest.yaml"), []byte(manifest), 0o600); err != nil {
-		t.Fatalf("manifest: %v", err)
-	}
-	loader, err := config.NewLoader(root)
-	if err != nil {
-		t.Fatalf("new loader: %v", err)
-	}
-	cfg, err := loadProjectConfig(loader)
-	if err != nil {
-		t.Fatalf("load config: %v", err)
-	}
-	if cfg == nil || cfg.ClaudeDir != "" {
-		t.Fatalf("expected fallback config, got %+v", cfg)
 	}
 }
 
@@ -394,7 +376,7 @@ func TestModelFactoryFuncNil(t *testing.T) {
 
 func TestRuntimeHookAdapterRecordsEvents(t *testing.T) {
 	rec := defaultHookRecorder()
-	exec := newHookExecutor(Options{}, rec)
+	exec := newHookExecutor(Options{}, rec, nil)
 	adapter := &runtimeHookAdapter{executor: exec, recorder: rec}
 
 	if err := adapter.PreToolUse(context.Background(), coreevents.ToolUsePayload{Name: "t"}); err != nil {
@@ -431,25 +413,12 @@ func TestRuntimeHookAdapterRecordsEvents(t *testing.T) {
 
 func TestNewHookExecutorRegistersTypedHooks(t *testing.T) {
 	hook := newRecordingTypedHook()
-	exec := newHookExecutor(Options{TypedHooks: []any{hook}}, defaultHookRecorder())
+	exec := newHookExecutor(Options{TypedHooks: []any{hook}}, defaultHookRecorder(), nil)
 	evt := coreevents.Event{Type: coreevents.PreToolUse, Payload: coreevents.ToolUsePayload{Name: "echo"}}
 	if err := exec.Publish(evt); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
 	hook.WaitForCall(t)
-}
-
-func writeClaudeConfig(t *testing.T, projectRoot, payload string) string {
-	t.Helper()
-	claudeDir := filepath.Join(projectRoot, ".claude")
-	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
-		t.Fatalf("claude dir: %v", err)
-	}
-	configPath := filepath.Join(claudeDir, "config.yaml")
-	if err := os.WriteFile(configPath, []byte(payload), 0o600); err != nil {
-		t.Fatalf("config file: %v", err)
-	}
-	return claudeDir
 }
 
 type fakeStringer struct {

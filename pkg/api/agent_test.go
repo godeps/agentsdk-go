@@ -21,25 +21,15 @@ func TestRuntimeRequiresModelFactory(t *testing.T) {
 	}
 }
 
-func TestRuntimeLoadsConfigFallback(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	manifestDir := filepath.Join(home, ".claude", "plugins", "marketplaces")
-	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
-		t.Fatalf("manifest dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(manifestDir, "manifest.yaml"), []byte("plugins: []\n"), 0o600); err != nil {
-		t.Fatalf("manifest: %v", err)
-	}
-
+func TestRuntimeLoadsSettingsFallback(t *testing.T) {
 	opts := Options{ProjectRoot: t.TempDir(), Model: &stubModel{responses: []*model.Response{{Message: model.Message{Role: "assistant", Content: "ok"}}}}}
 	rt, err := New(context.Background(), opts)
 	if err != nil {
 		t.Fatalf("runtime: %v", err)
 	}
 	t.Cleanup(func() { _ = rt.Close() })
-	if rt.Config() == nil {
-		t.Fatal("expected fallback config")
+	if rt.Settings() == nil {
+		t.Fatal("expected fallback settings")
 	}
 }
 
@@ -164,8 +154,9 @@ func newClaudeProject(t *testing.T) string {
 	if err := os.MkdirAll(claude, 0o755); err != nil {
 		t.Fatalf("claude dir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(claude, "config.yaml"), []byte("version: '1.0'\n"), 0o600); err != nil {
-		t.Fatalf("config: %v", err)
+	settings := []byte(`{"model":"claude-3-opus"}`)
+	if err := os.WriteFile(filepath.Join(claude, "settings.json"), settings, 0o600); err != nil {
+		t.Fatalf("settings: %v", err)
 	}
 	return root
 }

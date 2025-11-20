@@ -83,7 +83,7 @@ func TestRunStreamProducesEvents(t *testing.T) {
 	}
 }
 
-func TestRunStreamRejectsEmptyPrompt(t *testing.T) {
+func TestRunStreamRejectsEmptyPromptFallback(t *testing.T) {
 	rt := &Runtime{opts: Options{ProjectRoot: t.TempDir()}, mode: ModeContext{EntryPoint: EntryPointCLI}, histories: newHistoryStore(0)}
 	if _, err := rt.RunStream(context.Background(), Request{Prompt: "   "}); err == nil {
 		t.Fatal("expected empty prompt error")
@@ -772,5 +772,50 @@ func TestTaskRunnerConvertsSubagentErrorFlag(t *testing.T) {
 	data, ok := res.Data.(map[string]any)
 	if !ok || data == nil || data["subagent"] != subagents.TypeGeneralPurpose || data["error"] != "model refused" {
 		t.Fatalf("expected error metadata, got %+v", res.Data)
+	}
+}
+
+func TestRunStreamRejectsEmptyPrompt(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{responses: []*model.Response{{Message: model.Message{Role: "assistant"}}}}
+	rt, err := New(context.Background(), Options{ProjectRoot: root, Model: mdl})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	events, err := rt.RunStream(context.Background(), Request{})
+	if err == nil {
+		t.Fatal("expected prompt validation error")
+	}
+	if events != nil {
+		t.Fatal("expected nil event channel on failure")
+	}
+}
+
+func TestRunStreamEmitsErrorEvent(t *testing.T) {
+	root := newClaudeProject(t)
+	mdl := &stubModel{err: errors.New("boom")}
+	rt, err := New(context.Background(), Options{ProjectRoot: root, Model: mdl})
+	if err != nil {
+		t.Fatalf("runtime: %v", err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+
+	stream, err := rt.RunStream(context.Background(), Request{Prompt: "hi"})
+	if err != nil {
+		t.Fatalf("run stream: %v", err)
+	}
+	found := false
+	for evt := range stream {
+		if evt.Type == EventError {
+			found = true
+			if evt.IsError == nil || !*evt.IsError {
+				t.Fatalf("expected IsError flag, got %+v", evt)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected error event")
 	}
 }
