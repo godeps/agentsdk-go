@@ -15,7 +15,7 @@ func TestGlobToolListsMatches(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, "a.txt"), []byte("one"), 0600)
 	_ = os.WriteFile(filepath.Join(dir, "b.go"), []byte("two"), 0600)
 	fileDirErr := NewGlobToolWithRoot(dir)
-	if _, err := fileDirErr.Execute(context.Background(), map[string]any{"pattern": "*", "dir": "a.txt"}); err == nil {
+	if _, err := fileDirErr.Execute(context.Background(), map[string]any{"pattern": "*", "path": "a.txt"}); err == nil {
 		t.Fatalf("expected dir validation error")
 	}
 	tool := NewGlobToolWithRoot(dir)
@@ -83,7 +83,7 @@ func TestGrepToolSearchesFile(t *testing.T) {
 	}
 
 	tool := NewGrepToolWithRoot(dir)
-	res, err := tool.Execute(context.Background(), map[string]any{"pattern": "foo", "path": target, "context_lines": 1})
+	res, err := tool.Execute(context.Background(), map[string]any{"pattern": "foo", "path": target, "context_lines": 1, "output_mode": "content"})
 	if err != nil {
 		t.Fatalf("grep failed: %v", err)
 	}
@@ -91,7 +91,7 @@ func TestGrepToolSearchesFile(t *testing.T) {
 		t.Fatalf("missing match output: %s", res.Output)
 	}
 
-	res2, err := tool.Execute(context.Background(), map[string]any{"pattern": "foo", "path": target, "context_lines": 42})
+	res2, err := tool.Execute(context.Background(), map[string]any{"pattern": "foo", "path": target, "context_lines": 42, "output_mode": "content"})
 	if err != nil {
 		t.Fatalf("unexpected error for clamped context: %v", err)
 	}
@@ -131,7 +131,7 @@ func TestGlobAndGrepMetadata(t *testing.T) {
 	if g := NewGrepTool(); g.Description() == "" || g.Name() == "" || g.Schema() == nil {
 		t.Fatalf("grep metadata missing")
 	}
-	if _, err := NewGlobTool().Execute(context.Background(), map[string]any{"pattern": "*", "dir": "missing"}); err == nil {
+	if _, err := NewGlobTool().Execute(context.Background(), map[string]any{"pattern": "*", "path": "missing"}); err == nil {
 		t.Fatalf("expected stat error for missing dir")
 	}
 }
