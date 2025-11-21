@@ -154,7 +154,14 @@ type loaderOptions struct {
 }
 
 func buildLoaderOptions(opts Options) loaderOptions {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return loaderOptions{
+			ProjectRoot: opts.ProjectRoot,
+			UserHome:    "",
+			EnableUser:  false,
+		}
+	}
 	return loaderOptions{
 		ProjectRoot: opts.ProjectRoot,
 		UserHome:    home,

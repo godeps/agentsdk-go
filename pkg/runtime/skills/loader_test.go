@@ -72,11 +72,25 @@ func TestLoadFromFS_Merge(t *testing.T) {
 	user := findRegistration(t, regs, "user-skill")
 
 	res, err := project.Handler.Execute(context.Background(), ActivationContext{})
-	if err != nil || res.Output.(map[string]any)["body"] != "project body" {
+	if err != nil {
+		t.Fatalf("unexpected project result: %v %#v", err, res.Output)
+	}
+	projectOutput, ok := res.Output.(map[string]any)
+	if !ok {
+		t.Fatalf("project output should be map, got %T", res.Output)
+	}
+	if body, ok := projectOutput["body"].(string); !ok || body != "project body" {
 		t.Fatalf("unexpected project result: %v %#v", err, res.Output)
 	}
 	res, err = user.Handler.Execute(context.Background(), ActivationContext{})
-	if err != nil || res.Output.(map[string]any)["body"] != "user body" {
+	if err != nil {
+		t.Fatalf("unexpected user result: %v %#v", err, res.Output)
+	}
+	userOutput, ok := res.Output.(map[string]any)
+	if !ok {
+		t.Fatalf("user output should be map, got %T", res.Output)
+	}
+	if body, ok := userOutput["body"].(string); !ok || body != "user body" {
 		t.Fatalf("unexpected user result: %v %#v", err, res.Output)
 	}
 }
@@ -136,7 +150,10 @@ func TestLoadFromFS_SupportFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
-	output := res.Output.(map[string]any)
+	output, ok := res.Output.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map output, got %T", res.Output)
+	}
 	support, ok := output["support_files"].(map[string]string)
 	if !ok {
 		t.Fatalf("expected support files map, got %T", output["support_files"])
@@ -206,7 +223,7 @@ func mustWrite(t *testing.T, path, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 }

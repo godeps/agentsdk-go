@@ -17,7 +17,7 @@ func TestLoadFromFS_Basic(t *testing.T) {
 
 	filePath := filepath.Join(cmdDir, "ping.md")
 	content := "hello $ARGUMENTS"
-	if err := os.WriteFile(filePath, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(filePath, []byte(content), 0o600); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -175,7 +175,7 @@ func mustWrite(t *testing.T, path, content string) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 }

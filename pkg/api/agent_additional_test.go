@@ -314,16 +314,24 @@ func TestToolWhitelistDeniesExecution(t *testing.T) {
 		{Message: model.Message{Role: "assistant", ToolCalls: []model.ToolCall{
 			{ID: "c1", Name: "echo", Arguments: map[string]any{"text": "hi"}},
 		}}},
+		{Message: model.Message{Role: "assistant", Content: "done"}},
 	}}
-	rt, err := New(context.Background(), Options{ProjectRoot: root, Model: mdl, Tools: []tool.Tool{&echoTool{}}})
+	echo := &echoTool{}
+	rt, err := New(context.Background(), Options{ProjectRoot: root, Model: mdl, Tools: []tool.Tool{echo}})
 	if err != nil {
 		t.Fatalf("runtime: %v", err)
 	}
 	defer rt.Close()
 
-	_, err = rt.Run(context.Background(), Request{Prompt: "call", ToolWhitelist: []string{"other"}})
-	if err == nil {
-		t.Fatal("expected whitelist error")
+	resp, err := rt.Run(context.Background(), Request{Prompt: "call", ToolWhitelist: []string{"other"}})
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if resp == nil || resp.Result == nil || resp.Result.Output != "done" {
+		t.Fatalf("unexpected response: %+v", resp)
+	}
+	if echo.calls != 0 {
+		t.Fatalf("expected tool to be blocked by whitelist, got %d executions", echo.calls)
 	}
 }
 

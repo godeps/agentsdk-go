@@ -461,7 +461,7 @@ func TestParseHookField(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "map_format",
+			name:  "map_format",
 			input: `{"tool": "echo test"}`,
 			expected: map[string]string{
 				"tool": "echo test",

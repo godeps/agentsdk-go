@@ -225,7 +225,7 @@ func mustWrite(t *testing.T, root, relative, content string) string {
 	if err := makeDirs(path); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
 	return path

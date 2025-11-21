@@ -268,7 +268,7 @@ func loadSupportFiles(dir string) (map[string]string, []error) {
 			errs = append(errs, fmt.Errorf("skills: %s is not a directory", root))
 			continue
 		}
-		_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				errs = append(errs, fmt.Errorf("skills: walk %s: %w", path, walkErr))
 				return nil
@@ -287,7 +287,9 @@ func loadSupportFiles(dir string) (map[string]string, []error) {
 			}
 			out[filepath.ToSlash(rel)] = string(data)
 			return nil
-		})
+		}); walkErr != nil {
+			errs = append(errs, fmt.Errorf("skills: walk %s: %w", root, walkErr))
+		}
 	}
 
 	if len(out) == 0 {
