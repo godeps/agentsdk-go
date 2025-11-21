@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	defaultBashTimeout = 30 * time.Second
-	maxBashTimeout     = 2 * time.Minute
+	defaultBashTimeout = 10 * time.Minute
+	maxBashTimeout     = 60 * time.Minute
+	maxBashOutputLen   = 30000
 	bashDescript       = `
 	# Bash Tool Documentation
 
@@ -286,7 +287,7 @@ func (b *BashTool) Execute(ctx context.Context, params map[string]interface{}) (
 
 	result := &tool.ToolResult{
 		Success: runErr == nil,
-		Output:  combineOutput(stdout.String(), stderr.String()),
+		Output:  truncateOutput(combineOutput(stdout.String(), stderr.String())),
 		Data: map[string]interface{}{
 			"workdir":     workdir,
 			"duration_ms": duration.Milliseconds(),
