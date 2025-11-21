@@ -51,8 +51,17 @@ func (e *Executor) Execute(ctx context.Context, call Call) (*CallResult, error) 
 		return nil, err
 	}
 
+	params := call.cloneParams()
 	started := time.Now()
-	res, execErr := tool.Execute(ctx, call.cloneParams())
+	var (
+		res     *ToolResult
+		execErr error
+	)
+	if streamingTool, ok := tool.(StreamingTool); ok && call.StreamSink != nil {
+		res, execErr = streamingTool.StreamExecute(ctx, params, call.StreamSink)
+	} else {
+		res, execErr = tool.Execute(ctx, params)
+	}
 	cr := &CallResult{
 		Call:        call,
 		Result:      res,

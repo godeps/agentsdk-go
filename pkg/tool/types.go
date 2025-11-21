@@ -17,6 +17,10 @@ type Call struct {
 	Path   string
 	Host   string
 	Usage  sandbox.ResourceUsage
+	// StreamSink optionally receives incremental output when the target tool
+	// supports streaming via StreamingTool. It is ignored by non-streaming
+	// tools to preserve backwards compatibility.
+	StreamSink func(chunk string, isStderr bool)
 }
 
 // cloneParams performs a shallow copy to keep tool execution isolated from

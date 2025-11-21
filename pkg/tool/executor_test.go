@@ -36,6 +36,29 @@ func (s *stubTool) Execute(ctx context.Context, params map[string]interface{}) (
 	return &ToolResult{Success: true, Output: "ok"}, nil
 }
 
+type streamingStubTool struct {
+	name     string
+	streamed int32
+	executed int32
+}
+
+func (s *streamingStubTool) Name() string        { return s.name }
+func (s *streamingStubTool) Description() string { return "stream stub" }
+func (s *streamingStubTool) Schema() *JSONSchema { return nil }
+func (s *streamingStubTool) Execute(ctx context.Context, params map[string]interface{}) (*ToolResult, error) {
+	atomic.AddInt32(&s.executed, 1)
+	return &ToolResult{Success: true, Output: "execute"}, nil
+}
+
+func (s *streamingStubTool) StreamExecute(ctx context.Context, params map[string]interface{}, emit func(chunk string, isStderr bool)) (*ToolResult, error) {
+	atomic.AddInt32(&s.streamed, 1)
+	if emit != nil {
+		emit("out", false)
+		emit("err", true)
+	}
+	return &ToolResult{Success: true, Output: "stream"}, nil
+}
+
 type fakeFSPolicy struct {
 	last string
 	err  error
@@ -64,6 +87,65 @@ func TestExecutorEnforcesSandbox(t *testing.T) {
 	}
 	if fsPolicy.last != "/tmp/blocked" {
 		t.Fatalf("path not forwarded to sandbox: %s", fsPolicy.last)
+	}
+}
+
+func TestExecutorUsesStreamExecuteWhenSinkProvided(t *testing.T) {
+	reg := NewRegistry()
+	tool := &streamingStubTool{name: "streamer"}
+	if err := reg.Register(tool); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	exec := NewExecutor(reg, nil)
+
+	var chunks []string
+	var errs []bool
+	sink := func(chunk string, isStderr bool) {
+		chunks = append(chunks, chunk)
+		errs = append(errs, isStderr)
+	}
+
+	cr, err := exec.Execute(context.Background(), Call{Name: "streamer", StreamSink: sink})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if cr.Result == nil || cr.Result.Output != "stream" {
+		t.Fatalf("unexpected result: %+v", cr.Result)
+	}
+	if atomic.LoadInt32(&tool.streamed) != 1 {
+		t.Fatalf("expected streaming path")
+	}
+	if atomic.LoadInt32(&tool.executed) != 0 {
+		t.Fatalf("execute should not be used when streaming sink is set")
+	}
+	if len(chunks) != 2 || chunks[0] != "out" || chunks[1] != "err" {
+		t.Fatalf("stream sink not invoked: %+v", chunks)
+	}
+	if len(errs) != 2 || errs[0] || !errs[1] {
+		t.Fatalf("stderr flags incorrect: %+v", errs)
+	}
+}
+
+func TestExecutorFallsBackToExecuteWithoutSink(t *testing.T) {
+	reg := NewRegistry()
+	tool := &streamingStubTool{name: "streamer"}
+	if err := reg.Register(tool); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	exec := NewExecutor(reg, nil)
+
+	cr, err := exec.Execute(context.Background(), Call{Name: "streamer"})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if cr.Result == nil || cr.Result.Output != "execute" {
+		t.Fatalf("unexpected result: %+v", cr.Result)
+	}
+	if atomic.LoadInt32(&tool.executed) != 1 {
+		t.Fatalf("Execute should run when no sink present")
+	}
+	if atomic.LoadInt32(&tool.streamed) != 0 {
+		t.Fatalf("StreamExecute should not run without sink")
 	}
 }
 
