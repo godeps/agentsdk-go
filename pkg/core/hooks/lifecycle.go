@@ -18,14 +18,8 @@ type (
 	UserPromptSubmitHook interface {
 		UserPromptSubmit(context.Context, events.UserPromptPayload) error
 	}
-	SessionStartHook interface {
-		SessionStart(context.Context, events.SessionPayload) error
-	}
 	StopHook interface {
 		Stop(context.Context, events.StopPayload) error
-	}
-	SubagentStopHook interface {
-		SubagentStop(context.Context, events.SubagentStopPayload) error
 	}
 	NotificationHook interface {
 		Notification(context.Context, events.NotificationPayload) error
@@ -38,8 +32,6 @@ type AllHook interface {
 	PreToolUseHook
 	PostToolUseHook
 	UserPromptSubmitHook
-	SessionStartHook
 	StopHook
-	SubagentStopHook
 	NotificationHook
 }

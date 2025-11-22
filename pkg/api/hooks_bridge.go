@@ -1,10 +1,6 @@
 package api
 
 import (
-	"context"
-	"io"
-	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/cexll/agentsdk-go/pkg/config"
@@ -18,8 +14,9 @@ func newHookExecutor(opts Options, recorder HookRecorder, settings *config.Setti
 		exec.Register(opts.TypedHooks...)
 	}
 	if !hooksDisabled(settings) {
-		if hook := buildSettingsHook(settings); hook != nil {
-			exec.Register(hook)
+		hooks := buildSettingsHooks(settings)
+		if len(hooks) > 0 {
+			exec.Register(hooks...)
 		}
 	}
 	_ = recorder
@@ -30,55 +27,65 @@ func hooksDisabled(settings *config.Settings) bool {
 	return settings != nil && settings.DisableAllHooks != nil && *settings.DisableAllHooks
 }
 
-type settingsHook struct {
-	cfg *config.HooksConfig
-	env map[string]string
-}
-
-func buildSettingsHook(settings *config.Settings) *settingsHook {
+// buildSettingsHooks converts settings.Hooks config to ShellHook structs.
+func buildSettingsHooks(settings *config.Settings) []corehooks.ShellHook {
 	if settings == nil || settings.Hooks == nil {
 		return nil
 	}
-	if len(settings.Hooks.PreToolUse) == 0 && len(settings.Hooks.PostToolUse) == 0 {
-		return nil
-	}
+
+	var hooks []corehooks.ShellHook
 	env := map[string]string{}
 	for k, v := range settings.Env {
 		env[k] = v
 	}
-	return &settingsHook{cfg: settings.Hooks, env: env}
+
+	// Build PreToolUse hooks
+	for toolName, cmd := range settings.Hooks.PreToolUse {
+		if cmd == "" {
+			continue
+		}
+		selectorPattern := normalizeToolSelectorPattern(toolName)
+		sel, err := corehooks.NewSelector(selectorPattern, "")
+		if err != nil {
+			// skip invalid selector patterns rather than failing runtime startup
+			continue
+		}
+		hooks = append(hooks, corehooks.ShellHook{
+			Event:    coreevents.PreToolUse,
+			Command:  cmd,
+			Selector: sel,
+			Env:      env,
+			Name:     "settings:pre:" + toolName,
+		})
+	}
+
+	// Build PostToolUse hooks
+	for toolName, cmd := range settings.Hooks.PostToolUse {
+		if cmd == "" {
+			continue
+		}
+		selectorPattern := normalizeToolSelectorPattern(toolName)
+		sel, err := corehooks.NewSelector(selectorPattern, "")
+		if err != nil {
+			// skip invalid selector patterns rather than failing runtime startup
+			continue
+		}
+		hooks = append(hooks, corehooks.ShellHook{
+			Event:    coreevents.PostToolUse,
+			Command:  cmd,
+			Selector: sel,
+			Env:      env,
+			Name:     "settings:post:" + toolName,
+		})
+	}
+
+	return hooks
 }
 
-func (h *settingsHook) PreToolUse(ctx context.Context, payload coreevents.ToolUsePayload) error {
-	return h.run(ctx, h.cfg.PreToolUse, payload.Name)
-}
-
-func (h *settingsHook) PostToolUse(ctx context.Context, payload coreevents.ToolResultPayload) error {
-	return h.run(ctx, h.cfg.PostToolUse, payload.Name)
-}
-
-func (h *settingsHook) run(ctx context.Context, hooks map[string]string, toolName string) error {
-	if h == nil || len(hooks) == 0 {
-		return nil
+// normalizeToolSelectorPattern maps wildcard "*" to the selector wildcard (empty pattern).
+func normalizeToolSelectorPattern(pattern string) string {
+	if strings.TrimSpace(pattern) == "*" {
+		return ""
 	}
-	cmd := strings.TrimSpace(hooks[toolName])
-	if cmd == "" {
-		return nil
-	}
-	c := exec.CommandContext(ctx, "/bin/sh", "-c", cmd) // shell parity with Claude Code
-	c.Stdout = io.Discard
-	c.Stderr = io.Discard
-	c.Env = append(os.Environ(), formatEnv(h.env)...)
-	return c.Run()
-}
-
-func formatEnv(env map[string]string) []string {
-	if len(env) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(env))
-	for k, v := range env {
-		out = append(out, k+"="+v)
-	}
-	return out
+	return pattern
 }

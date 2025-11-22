@@ -26,6 +26,7 @@ type Event struct {
 	ID        string      // optional explicit identifier; generated when empty
 	Type      EventType   // required
 	Timestamp time.Time   // auto-populated when zero
+	SessionID string      // optional session identifier for hook payloads
 	Payload   interface{} // optional, type asserted by hook executors
 }
 

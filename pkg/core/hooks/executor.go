@@ -1,9 +1,15 @@
 package hooks
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -11,248 +17,426 @@ import (
 	"github.com/cexll/agentsdk-go/pkg/core/middleware"
 )
 
-// Executor orchestrates event delivery to registered hooks via the shared
-// event bus. It ensures ordering, deduplication and fault isolation.
+// defaultHookTimeout mirrors Claude Code's documented 30s hook budget.
+const defaultHookTimeout = 30 * time.Second
+
+// Decision captures the permission outcome encoded in the hook exit code.
+type Decision int
+
+const (
+	DecisionAllow Decision = iota
+	DecisionDeny
+	DecisionAsk
+	DecisionError
+)
+
+func (d Decision) String() string {
+	switch d {
+	case DecisionAllow:
+		return "allow"
+	case DecisionDeny:
+		return "deny"
+	case DecisionAsk:
+		return "ask"
+	default:
+		return "error"
+	}
+}
+
+// PermissionDecision holds the parsed stdout JSON emitted by PreToolUse hooks.
+type PermissionDecision map[string]any
+
+// Result captures the full outcome of executing a shell hook.
+type Result struct {
+	Event      events.Event
+	Decision   Decision
+	ExitCode   int
+	Permission PermissionDecision
+	Stdout     string
+	Stderr     string
+}
+
+// Selector filters hooks by tool name and/or payload pattern.
+type Selector struct {
+	ToolName *regexp.Regexp
+	Pattern  *regexp.Regexp
+}
+
+// NewSelector compiles optional regex patterns. Empty strings are treated as wildcards.
+func NewSelector(toolPattern, payloadPattern string) (Selector, error) {
+	sel := Selector{}
+	if strings.TrimSpace(toolPattern) != "" {
+		re, err := regexp.Compile(toolPattern)
+		if err != nil {
+			return sel, fmt.Errorf("hooks: compile tool matcher: %w", err)
+		}
+		sel.ToolName = re
+	}
+	if strings.TrimSpace(payloadPattern) != "" {
+		re, err := regexp.Compile(payloadPattern)
+		if err != nil {
+			return sel, fmt.Errorf("hooks: compile payload matcher: %w", err)
+		}
+		sel.Pattern = re
+	}
+	return sel, nil
+}
+
+// Match returns true when the event satisfies all configured selectors.
+func (s Selector) Match(evt events.Event) bool {
+	if s.ToolName != nil {
+		name := extractToolName(evt.Payload)
+		if name == "" || !s.ToolName.MatchString(name) {
+			return false
+		}
+	}
+	if s.Pattern != nil {
+		payload, err := json.Marshal(evt.Payload)
+		if err != nil {
+			return false
+		}
+		if !s.Pattern.Match(payload) {
+			return false
+		}
+	}
+	return true
+}
+
+// ShellHook describes a single shell command bound to an event type.
+type ShellHook struct {
+	Event    events.EventType
+	Command  string
+	Selector Selector
+	Timeout  time.Duration
+	Env      map[string]string
+	Name     string // optional label for debugging
+}
+
+// Executor executes hooks by spawning shell commands with JSON stdin payloads.
 type Executor struct {
-	bus     *events.Bus
-	busOpts []events.BusOption
+	hooks   []ShellHook
 	hooksMu sync.RWMutex
-	hooks   []any
+
 	mw      []middleware.Middleware
 	timeout time.Duration
 	errFn   func(events.EventType, error)
-	bound   sync.Once
+
+	defaultCommand string
 }
 
 // ExecutorOption configures optional behaviour.
 type ExecutorOption func(*Executor)
 
-// WithMiddleware configures middleware around hook invocation.
+// WithMiddleware wraps execution with the provided middleware chain.
 func WithMiddleware(mw ...middleware.Middleware) ExecutorOption {
 	return func(e *Executor) {
 		e.mw = append(e.mw, mw...)
 	}
 }
 
-// WithTimeout sets a default timeout for hook execution if individual
-// subscriptions do not override it.
+// WithTimeout sets the default timeout per hook run. Zero uses the default budget.
 func WithTimeout(d time.Duration) ExecutorOption {
 	return func(e *Executor) {
 		e.timeout = d
 	}
 }
 
-// WithEventDedup configures deduplication window size.
-func WithEventDedup(limit int) ExecutorOption {
-	return func(e *Executor) {
-		e.busOpts = append(e.busOpts, events.WithDedupWindow(limit))
-	}
-}
-
-// WithBus allows injecting a pre-configured bus (useful for testing).
-func WithBus(bus *events.Bus) ExecutorOption {
-	return func(e *Executor) {
-		e.bus = bus
-	}
-}
-
-// WithErrorHandler captures hook failures without propagating them.
+// WithErrorHandler installs an async error sink. Errors are still returned to callers.
 func WithErrorHandler(fn func(events.EventType, error)) ExecutorOption {
 	return func(e *Executor) {
 		e.errFn = fn
 	}
 }
 
-// NewExecutor creates a new executor with defaults tuned for deterministic
-// ordering and safe concurrent use.
+// WithCommand defines the fallback shell command used when a hook omits Command.
+func WithCommand(cmd string) ExecutorOption {
+	return func(e *Executor) {
+		e.defaultCommand = strings.TrimSpace(cmd)
+	}
+}
+
+// NewExecutor constructs a shell-based hook executor.
 func NewExecutor(opts ...ExecutorOption) *Executor {
-	exe := &Executor{}
+	exe := &Executor{timeout: defaultHookTimeout, errFn: func(events.EventType, error) {}}
 	for _, opt := range opts {
 		opt(exe)
 	}
-	if exe.bus == nil {
-		exe.bus = events.NewBus(exe.busOpts...)
+	if exe.timeout <= 0 {
+		exe.timeout = defaultHookTimeout
 	}
-	if exe.errFn == nil {
-		exe.errFn = func(events.EventType, error) {}
-	}
-	exe.Bind()
 	return exe
 }
 
-// Register adds hooks for the executor to notify.
-func (e *Executor) Register(h ...any) {
+// Register adds shell hooks to the executor. Hooks are matched by event type and selector.
+func (e *Executor) Register(hooks ...ShellHook) {
 	e.hooksMu.Lock()
 	defer e.hooksMu.Unlock()
-	e.hooks = append(e.hooks, h...)
+	e.hooks = append(e.hooks, hooks...)
 }
 
-// Publish sends an event through the bus. Deduplication and ordering are
-// handled transparently.
+// Publish executes matching hooks for the event using a background context.
+// It preserves the previous API while delegating to Execute.
 func (e *Executor) Publish(evt events.Event) error {
-	if e == nil || e.bus == nil {
-		return errors.New("hooks: executor missing bus")
+	_, err := e.Execute(context.Background(), evt)
+	return err
+}
+
+// Execute runs all matching hooks for the provided event and returns their results.
+func (e *Executor) Execute(ctx context.Context, evt events.Event) ([]Result, error) {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return e.bus.Publish(evt)
-}
-
-// Bind wire the executor with bus subscribers for the supported event types.
-func (e *Executor) Bind() {
-	e.bound.Do(func() {
-		build := func(fn func(context.Context, events.Event)) events.Handler {
-			return func(ctx context.Context, evt events.Event) {
-				handler := middleware.Chain(func(ctx context.Context, evt events.Event) error {
-					fn(ctx, evt)
-					return nil
-				}, e.mw...)
-				if err := handler(ctx, evt); err != nil {
-					e.errFn(evt.Type, err)
-				}
-			}
-		}
-		opts := func() []events.SubscriptionOption {
-			if e.timeout <= 0 {
-				return nil
-			}
-			return []events.SubscriptionOption{events.WithSubscriptionTimeout(e.timeout)}
-		}
-		e.bus.Subscribe(events.PreToolUse, build(e.handlePreToolUse), opts()...)
-		e.bus.Subscribe(events.PostToolUse, build(e.handlePostToolUse), opts()...)
-		e.bus.Subscribe(events.UserPromptSubmit, build(e.handleUserPrompt), opts()...)
-		e.bus.Subscribe(events.SessionStart, build(e.handleSessionStart), opts()...)
-		e.bus.Subscribe(events.Stop, build(e.handleStop), opts()...)
-		e.bus.Subscribe(events.SubagentStop, build(e.handleSubagentStop), opts()...)
-		e.bus.Subscribe(events.Notification, build(e.handleNotification), opts()...)
-	})
-}
-
-func (e *Executor) handlePreToolUse(ctx context.Context, evt events.Event) {
-	payload, ok := evt.Payload.(events.ToolUsePayload)
-	if !ok {
-		e.errFn(events.PreToolUse, fmt.Errorf("hooks: invalid payload for PreToolUse: %T", evt.Payload))
-		return
+	if err := validateEvent(evt.Type); err != nil {
+		return nil, err
 	}
-	e.forEachHook(func(h any) {
-		if hook, ok := h.(PreToolUseHook); ok {
-			if err := safeCall(func() error { return hook.PreToolUse(ctx, payload) }); err != nil {
-				e.errFn(events.PreToolUse, err)
-			}
-		}
-	})
-}
 
-func (e *Executor) handlePostToolUse(ctx context.Context, evt events.Event) {
-	payload, ok := evt.Payload.(events.ToolResultPayload)
-	if !ok {
-		e.errFn(events.PostToolUse, fmt.Errorf("hooks: invalid payload for PostToolUse: %T", evt.Payload))
-		return
+	var results []Result
+	handler := middleware.Chain(func(c context.Context, ev events.Event) error {
+		var err error
+		results, err = e.runHooks(c, ev)
+		return err
+	}, e.mw...)
+
+	if err := handler(ctx, evt); err != nil {
+		e.report(evt.Type, err)
+		return nil, err
 	}
-	e.forEachHook(func(h any) {
-		if hook, ok := h.(PostToolUseHook); ok {
-			if err := safeCall(func() error { return hook.PostToolUse(ctx, payload) }); err != nil {
-				e.errFn(events.PostToolUse, err)
-			}
-		}
-	})
+	return results, nil
 }
 
-func (e *Executor) handleUserPrompt(ctx context.Context, evt events.Event) {
-	payload, ok := evt.Payload.(events.UserPromptPayload)
-	if !ok {
-		e.errFn(events.UserPromptSubmit, fmt.Errorf("hooks: invalid payload for UserPromptSubmit: %T", evt.Payload))
-		return
+// Close is present for API parity; no resources are held.
+func (e *Executor) Close() {}
+
+func (e *Executor) runHooks(ctx context.Context, evt events.Event) ([]Result, error) {
+	hooks := e.matchingHooks(evt)
+	if len(hooks) == 0 {
+		return nil, nil
 	}
-	e.forEachHook(func(h any) {
-		if hook, ok := h.(UserPromptSubmitHook); ok {
-			if err := safeCall(func() error { return hook.UserPromptSubmit(ctx, payload) }); err != nil {
-				e.errFn(events.UserPromptSubmit, err)
-			}
-		}
-	})
-}
 
-func (e *Executor) handleSessionStart(ctx context.Context, evt events.Event) {
-	payload, ok := evt.Payload.(events.SessionPayload)
-	if !ok {
-		e.errFn(events.SessionStart, fmt.Errorf("hooks: invalid payload for SessionStart: %T", evt.Payload))
-		return
+	payload, err := buildPayload(evt)
+	if err != nil {
+		return nil, err
 	}
-	e.forEachHook(func(h any) {
-		if hook, ok := h.(SessionStartHook); ok {
-			if err := safeCall(func() error { return hook.SessionStart(ctx, payload) }); err != nil {
-				e.errFn(events.SessionStart, err)
-			}
-		}
-	})
-}
 
-func (e *Executor) handleStop(ctx context.Context, evt events.Event) {
-	payload, ok := evt.Payload.(events.StopPayload)
-	if !ok {
-		e.errFn(events.Stop, fmt.Errorf("hooks: invalid payload for Stop: %T", evt.Payload))
-		return
+	results := make([]Result, 0, len(hooks))
+	for _, hook := range hooks {
+		res, err := e.executeHook(ctx, hook, payload, evt)
+		if err != nil {
+			e.report(evt.Type, err)
+			return nil, err
+		}
+		results = append(results, res)
 	}
-	e.forEachHook(func(h any) {
-		if hook, ok := h.(StopHook); ok {
-			if err := safeCall(func() error { return hook.Stop(ctx, payload) }); err != nil {
-				e.errFn(events.Stop, err)
-			}
-		}
-	})
+	return results, nil
 }
 
-func (e *Executor) handleSubagentStop(ctx context.Context, evt events.Event) {
-	payload, ok := evt.Payload.(events.SubagentStopPayload)
-	if !ok {
-		e.errFn(events.SubagentStop, fmt.Errorf("hooks: invalid payload for SubagentStop: %T", evt.Payload))
-		return
-	}
-	e.forEachHook(func(h any) {
-		if hook, ok := h.(SubagentStopHook); ok {
-			if err := safeCall(func() error { return hook.SubagentStop(ctx, payload) }); err != nil {
-				e.errFn(events.SubagentStop, err)
-			}
-		}
-	})
-}
-
-func (e *Executor) handleNotification(ctx context.Context, evt events.Event) {
-	payload, ok := evt.Payload.(events.NotificationPayload)
-	if !ok {
-		e.errFn(events.Notification, fmt.Errorf("hooks: invalid payload for Notification: %T", evt.Payload))
-		return
-	}
-	e.forEachHook(func(h any) {
-		if hook, ok := h.(NotificationHook); ok {
-			if err := safeCall(func() error { return hook.Notification(ctx, payload) }); err != nil {
-				e.errFn(events.Notification, err)
-			}
-		}
-	})
-}
-
-func (e *Executor) forEachHook(fn func(any)) {
+func (e *Executor) matchingHooks(evt events.Event) []ShellHook {
 	e.hooksMu.RLock()
 	defer e.hooksMu.RUnlock()
-	for _, h := range e.hooks {
-		fn(h)
-	}
-}
 
-func safeCall(fn func() error) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("hooks: panic: %v", r)
-			return
+	var matches []ShellHook
+	for _, hook := range e.hooks {
+		if hook.Event != evt.Type {
+			continue
 		}
-	}()
-	return fn()
+		if hook.Selector.Match(evt) {
+			matches = append(matches, hook)
+		}
+	}
+
+	// Fallback: single default command bound to all events.
+	if len(matches) == 0 && strings.TrimSpace(e.defaultCommand) != "" {
+		matches = append(matches, ShellHook{Event: evt.Type, Command: e.defaultCommand})
+	}
+	return matches
 }
 
-// Close stops the underlying bus.
-func (e *Executor) Close() {
-	if e == nil || e.bus == nil {
-		return
+func (e *Executor) executeHook(ctx context.Context, hook ShellHook, payload []byte, evt events.Event) (Result, error) {
+	var res Result
+	res.Event = evt
+
+	cmdStr := strings.TrimSpace(hook.Command)
+	if cmdStr == "" {
+		cmdStr = e.defaultCommand
 	}
-	e.bus.Close()
+	if cmdStr == "" {
+		return res, errors.New("hooks: missing command")
+	}
+
+	deadline := effectiveTimeout(hook.Timeout, e.timeout)
+	runCtx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+
+	cmd := exec.CommandContext(runCtx, "/bin/sh", "-c", cmdStr)
+	cmd.Env = mergeEnv(os.Environ(), hook.Env)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Stdin = bytes.NewReader(payload)
+
+	err := cmd.Run()
+	outStr := stdout.String()
+	errStr := stderr.String()
+
+	// Handle context timeout explicitly.
+	if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+		if cmd.Process != nil {
+			// nolint:errcheck // Process cleanup, error not actionable
+			cmd.Process.Kill()
+		}
+		return res, fmt.Errorf("hooks: command timed out after %s: %s", deadline, errStr)
+	}
+
+	decision, exitCode, failure := classifyExit(err)
+	res.Decision = decision
+	res.ExitCode = exitCode
+	res.Stdout = outStr
+	res.Stderr = errStr
+
+	if failure != nil {
+		return res, fmt.Errorf("hooks: %w; stderr: %s", failure, errStr)
+	}
+
+	if evt.Type == events.PreToolUse && strings.TrimSpace(outStr) != "" {
+		permission, err := decodePermission(outStr)
+		if err != nil {
+			return res, err
+		}
+		res.Permission = permission
+	}
+
+	return res, nil
+}
+
+func effectiveTimeout(hookTimeout, defaultTimeout time.Duration) time.Duration {
+	if hookTimeout > 0 {
+		return hookTimeout
+	}
+	if defaultTimeout > 0 {
+		return defaultTimeout
+	}
+	return defaultHookTimeout
+}
+
+func classifyExit(runErr error) (Decision, int, error) {
+	if runErr == nil {
+		return DecisionAllow, 0, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(runErr, &exitErr) {
+		code := exitErr.ExitCode()
+		switch code {
+		case 0:
+			return DecisionAllow, code, nil
+		case 1:
+			return DecisionDeny, code, nil
+		case 2:
+			return DecisionAsk, code, nil
+		default:
+			return DecisionError, code, fmt.Errorf("command exited with code %d", code)
+		}
+	}
+	return DecisionError, -1, runErr
+}
+
+func decodePermission(out string) (PermissionDecision, error) {
+	var parsed PermissionDecision
+	trimmed := strings.TrimSpace(out)
+	if err := json.Unmarshal([]byte(trimmed), &parsed); err != nil {
+		return nil, fmt.Errorf("hooks: decode permissionDecision: %w", err)
+	}
+	return parsed, nil
+}
+
+func buildPayload(evt events.Event) ([]byte, error) {
+	envelope := map[string]any{
+		"hook_event_name": evt.Type,
+	}
+	if evt.SessionID != "" {
+		envelope["session_id"] = evt.SessionID
+	}
+
+	switch p := evt.Payload.(type) {
+	case events.ToolUsePayload:
+		envelope["tool_input"] = sanitizedToolInput(p)
+	case events.ToolResultPayload:
+		envelope["tool_response"] = sanitizedToolResult(p)
+	case events.NotificationPayload:
+		envelope["notification"] = p
+	case events.UserPromptPayload:
+		envelope["user_prompt"] = p
+	case events.StopPayload:
+		envelope["stop"] = p
+	case nil:
+		// allowed
+	default:
+		return nil, fmt.Errorf("hooks: unsupported payload type %T", evt.Payload)
+	}
+
+	data, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, fmt.Errorf("hooks: marshal payload: %w", err)
+	}
+	return data, nil
+}
+
+func sanitizedToolResult(p events.ToolResultPayload) map[string]any {
+	out := map[string]any{
+		"name": p.Name,
+	}
+	if p.Result != nil {
+		out["result"] = p.Result
+	}
+	if p.Duration > 0 {
+		out["duration_ms"] = p.Duration.Milliseconds()
+	}
+	if p.Err != nil {
+		out["error"] = p.Err.Error()
+	}
+	return out
+}
+
+func sanitizedToolInput(p events.ToolUsePayload) map[string]any {
+	return map[string]any{
+		"name":   p.Name,
+		"params": p.Params,
+	}
+}
+
+func mergeEnv(base []string, extra map[string]string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	env := append([]string(nil), base...)
+	for k, v := range extra {
+		env = append(env, fmt.Sprintf("%s=%s", k, v))
+	}
+	return env
+}
+
+func extractToolName(payload any) string {
+	switch p := payload.(type) {
+	case events.ToolUsePayload:
+		return p.Name
+	case events.ToolResultPayload:
+		return p.Name
+	default:
+		return ""
+	}
+}
+
+func validateEvent(t events.EventType) error {
+	switch t {
+	case events.PreToolUse, events.PostToolUse, events.Notification, events.UserPromptSubmit, events.Stop:
+		return nil
+	default:
+		return fmt.Errorf("hooks: unsupported event %s", t)
+	}
+}
+
+func (e *Executor) report(t events.EventType, err error) {
+	if e.errFn != nil && err != nil {
+		e.errFn(t, err)
+	}
 }
