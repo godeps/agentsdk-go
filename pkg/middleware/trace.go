@@ -9,19 +9,23 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
 )
 
 // TraceMiddleware records middleware activity per session and renders a
 // lightweight HTML viewer alongside JSONL logs.
 type TraceMiddleware struct {
-	outputDir string
-	sessions  map[string]*traceSession
-	tmpl      *template.Template
-	mu        sync.Mutex
-	clock     func() time.Time
+	outputDir   string
+	sessions    map[string]*traceSession
+	tmpl        *template.Template
+	mu          sync.Mutex
+	clock       func() time.Time
+	traceSkills bool
 }
 
 type traceSession struct {
@@ -44,11 +48,26 @@ const (
 	TraceSessionIDContextKey TraceContextKey = "trace.session_id"
 	// SessionIDContextKey stores the generic session identifier fallback.
 	SessionIDContextKey TraceContextKey = "session_id"
+
+	traceSkillBeforeKey = "trace.skills.before"
+	traceSkillNamesKey  = "trace.skills.names"
+	skillsRegistryValue = "skills.registry"
+	forceSkillsValue    = "request.force_skills"
 )
+
+// TraceOption customizes optional TraceMiddleware behavior.
+type TraceOption func(*TraceMiddleware)
+
+// WithSkillTracing enables ForceSkills body-size logging.
+func WithSkillTracing(enabled bool) TraceOption {
+	return func(tm *TraceMiddleware) {
+		tm.traceSkills = enabled
+	}
+}
 
 // NewTraceMiddleware builds a TraceMiddleware that writes to outputDir
 // (defaults to .trace when empty).
-func NewTraceMiddleware(outputDir string) *TraceMiddleware {
+func NewTraceMiddleware(outputDir string, opts ...TraceOption) *TraceMiddleware {
 	dir := strings.TrimSpace(outputDir)
 	if dir == "" {
 		dir = ".trace"
@@ -62,17 +81,24 @@ func NewTraceMiddleware(outputDir string) *TraceMiddleware {
 		log.Printf("trace middleware: template parse: %v", err)
 	}
 
-	return &TraceMiddleware{
+	mw := &TraceMiddleware{
 		outputDir: dir,
 		sessions:  map[string]*traceSession{},
 		tmpl:      tmpl,
 		clock:     time.Now,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(mw)
+		}
+	}
+	return mw
 }
 
 func (m *TraceMiddleware) Name() string { return "trace" }
 
 func (m *TraceMiddleware) BeforeAgent(ctx context.Context, st *State) error {
+	m.traceSkillsSnapshot(ctx, st, true)
 	m.record(ctx, StageBeforeAgent, st)
 	return nil
 }
@@ -98,6 +124,7 @@ func (m *TraceMiddleware) AfterTool(ctx context.Context, st *State) error {
 }
 
 func (m *TraceMiddleware) AfterAgent(ctx context.Context, st *State) error {
+	m.traceSkillsSnapshot(ctx, st, false)
 	m.record(ctx, StageAfterAgent, st)
 	return nil
 }
@@ -422,4 +449,174 @@ func (m *TraceMiddleware) now() time.Time {
 
 func (m *TraceMiddleware) logf(format string, args ...any) {
 	log.Printf("trace middleware: "+format, args...)
+}
+
+func (m *TraceMiddleware) traceSkillsSnapshot(ctx context.Context, st *State, before bool) {
+	if m == nil || !m.traceSkills || st == nil {
+		return
+	}
+	ensureStateValues(st)
+	names := forceSkillsFromState(st.Values)
+	if len(names) == 0 {
+		return
+	}
+	registry := registryFromState(st.Values)
+	if registry == nil {
+		return
+	}
+	snapshot := skillBodies(registry, names)
+	if before {
+		st.Values[traceSkillNamesKey] = names
+		st.Values[traceSkillBeforeKey] = snapshot
+		return
+	}
+
+	beforeSnapshot, _ := st.Values[traceSkillBeforeKey].(map[string]int)
+	if len(beforeSnapshot) == 0 {
+		return
+	}
+
+	ordered := orderedSkillNames(names, beforeSnapshot, snapshot)
+	for _, name := range ordered {
+		m.logf("skill=%s body_before=%d body_after=%d", name, beforeSnapshot[name], snapshot[name])
+	}
+}
+
+func forceSkillsFromState(values map[string]any) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	if names := stringList(values[forceSkillsValue]); len(names) > 0 {
+		return names
+	}
+	return stringList(values[traceSkillNamesKey])
+}
+
+func registryFromState(values map[string]any) *skills.Registry {
+	if len(values) == 0 {
+		return nil
+	}
+	if reg, ok := values[skillsRegistryValue].(*skills.Registry); ok {
+		return reg
+	}
+	return nil
+}
+
+func skillBodies(reg *skills.Registry, names []string) map[string]int {
+	if reg == nil || len(names) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(names))
+	seen := map[string]struct{}{}
+	for _, name := range names {
+		key := strings.ToLower(strings.TrimSpace(name))
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+
+		skill, ok := reg.Get(key)
+		if !ok {
+			continue
+		}
+		out[skill.Definition().Name] = skillBodySize(skill.Handler())
+	}
+	return out
+}
+
+type bodySizer interface {
+	BodyLength() (int, bool)
+}
+
+func skillBodySize(handler skills.Handler) int {
+	if handler == nil {
+		return 0
+	}
+	if sizer, ok := handler.(bodySizer); ok && sizer != nil {
+		if size, loaded := sizer.BodyLength(); loaded {
+			return size
+		}
+		return 0
+	}
+	return 0
+}
+
+func stringList(value any) []string {
+	switch v := value.(type) {
+	case []string:
+		return dedupeStrings(v)
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, val := range v {
+			if s := anyToString(val); s != "" {
+				out = append(out, s)
+			}
+		}
+		return dedupeStrings(out)
+	default:
+		if s := anyToString(v); s != "" {
+			return []string{s}
+		}
+	}
+	return nil
+}
+
+func dedupeStrings(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		val := strings.ToLower(strings.TrimSpace(value))
+		if val == "" {
+			continue
+		}
+		if _, ok := seen[val]; ok {
+			continue
+		}
+		seen[val] = struct{}{}
+		result = append(result, val)
+	}
+	return result
+}
+
+func orderedSkillNames(names []string, before, after map[string]int) []string {
+	seen := map[string]struct{}{}
+	order := make([]string, 0, len(names))
+	for _, name := range names {
+		norm := strings.TrimSpace(name)
+		if norm == "" {
+			continue
+		}
+		if _, ok := seen[norm]; ok {
+			continue
+		}
+		seen[norm] = struct{}{}
+		order = append(order, norm)
+	}
+
+	var extras []string
+	for key := range before {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		extras = append(extras, key)
+	}
+	for key := range after {
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		extras = append(extras, key)
+	}
+	if len(extras) > 0 {
+		sort.Strings(extras)
+		order = append(order, extras...)
+	}
+	return order
 }

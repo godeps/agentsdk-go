@@ -16,6 +16,18 @@ import (
 	"golang.org/x/mod/semver"
 )
 
+// PluginMCPServerConfig describes MCP server configuration within a plugin.
+// This mirrors config.MCPServerConfig to avoid import cycles.
+type PluginMCPServerConfig struct {
+	Type           string            `json:"type"`              // stdio/http/sse
+	Command        string            `json:"command,omitempty"` // for stdio
+	Args           []string          `json:"args,omitempty"`
+	URL            string            `json:"url,omitempty"` // for http/sse
+	Env            map[string]string `json:"env,omitempty"`
+	Headers        map[string]string `json:"headers,omitempty"`
+	TimeoutSeconds int               `json:"timeoutSeconds,omitempty"`
+}
+
 const manifestFileName = "plugin.json"
 
 var (
@@ -29,17 +41,18 @@ var (
 // to preserve the existing trust-store workflow; the digest now protects the
 // canonical manifest payload instead of an entrypoint file.
 type Manifest struct {
-	Name        string              `json:"name"`
-	Version     string              `json:"version"`
-	Description string              `json:"description"`
-	Author      string              `json:"author"`
-	Commands    []string            `json:"commands"`
-	Agents      []string            `json:"agents"`
-	Skills      []string            `json:"skills"`
-	Hooks       map[string][]string `json:"hooks"`
-	Digest      string              `json:"digest,omitempty"`
-	Signer      string              `json:"signer,omitempty"`
-	Signature   string              `json:"signature,omitempty"`
+	Name        string                           `json:"name"`
+	Version     string                           `json:"version"`
+	Description string                           `json:"description"`
+	Author      string                           `json:"author"`
+	Commands    []string                         `json:"commands"`
+	Agents      []string                         `json:"agents"`
+	Skills      []string                         `json:"skills"`
+	Hooks       map[string][]string              `json:"hooks"`
+	MCPServers  map[string]PluginMCPServerConfig `json:"mcpServers,omitempty"`
+	Digest      string                           `json:"digest,omitempty"`
+	Signer      string                           `json:"signer,omitempty"`
+	Signature   string                           `json:"signature,omitempty"`
 
 	ManifestPath string `json:"-"`
 	PluginDir    string `json:"-"`
@@ -242,14 +255,15 @@ func computeManifestDigest(m *Manifest) (string, error) {
 		return "", errors.New("manifest is nil")
 	}
 	payload := struct {
-		Name        string              `json:"name"`
-		Version     string              `json:"version"`
-		Description string              `json:"description"`
-		Author      string              `json:"author"`
-		Commands    []string            `json:"commands,omitempty"`
-		Agents      []string            `json:"agents,omitempty"`
-		Skills      []string            `json:"skills,omitempty"`
-		Hooks       map[string][]string `json:"hooks,omitempty"`
+		Name        string                           `json:"name"`
+		Version     string                           `json:"version"`
+		Description string                           `json:"description"`
+		Author      string                           `json:"author"`
+		Commands    []string                         `json:"commands,omitempty"`
+		Agents      []string                         `json:"agents,omitempty"`
+		Skills      []string                         `json:"skills,omitempty"`
+		Hooks       map[string][]string              `json:"hooks,omitempty"`
+		MCPServers  map[string]PluginMCPServerConfig `json:"mcpServers,omitempty"`
 	}{
 		Name:        m.Name,
 		Version:     m.Version,
@@ -259,6 +273,7 @@ func computeManifestDigest(m *Manifest) (string, error) {
 		Agents:      m.Agents,
 		Skills:      m.Skills,
 		Hooks:       m.Hooks,
+		MCPServers:  m.MCPServers,
 	}
 	data, err := json.Marshal(payload)
 	if err != nil {
