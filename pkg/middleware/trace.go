@@ -471,8 +471,8 @@ func (m *TraceMiddleware) traceSkillsSnapshot(ctx context.Context, st *State, be
 		return
 	}
 
-	beforeSnapshot, _ := st.Values[traceSkillBeforeKey].(map[string]int)
-	if len(beforeSnapshot) == 0 {
+	beforeSnapshot, ok := st.Values[traceSkillBeforeKey].(map[string]int)
+	if !ok || len(beforeSnapshot) == 0 {
 		return
 	}
 

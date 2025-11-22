@@ -27,7 +27,10 @@ func (noopModel) Complete(context.Context, model.Request) (*model.Response, erro
 }
 
 func (noopModel) CompleteStream(ctx context.Context, req model.Request, cb model.StreamHandler) error {
-	resp, _ := noopModel{}.Complete(ctx, req)
+	resp, err := noopModel{}.Complete(ctx, req)
+	if err != nil {
+		return err
+	}
 	if cb != nil {
 		return cb(model.StreamResult{Final: true, Response: resp})
 	}
