@@ -22,10 +22,11 @@ const (
 )
 
 var (
-	ErrDuplicateSubagent  = errors.New("subagents: duplicate registration")
-	ErrUnknownSubagent    = errors.New("subagents: unknown target")
-	ErrNoMatchingSubagent = errors.New("subagents: no matching subagent")
-	ErrEmptyInstruction   = errors.New("subagents: instruction is empty")
+	ErrDuplicateSubagent    = errors.New("subagents: duplicate registration")
+	ErrUnknownSubagent      = errors.New("subagents: unknown target")
+	ErrNoMatchingSubagent   = errors.New("subagents: no matching subagent")
+	ErrEmptyInstruction     = errors.New("subagents: instruction is empty")
+	ErrDispatchUnauthorized = errors.New("subagents: dispatch not authorized")
 )
 
 var builtinSubagentTypes = map[string]Definition{
@@ -130,6 +131,38 @@ type Request struct {
 	Metadata      map[string]any
 }
 
+type dispatchSourceKey struct{}
+
+const DispatchSourceTaskTool = "task_tool"
+
+// WithDispatchSource tags ctx with an allowed dispatch origin.
+func WithDispatchSource(ctx context.Context, source string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	source = strings.ToLower(strings.TrimSpace(source))
+	if source == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, dispatchSourceKey{}, source)
+}
+
+// WithTaskDispatch marks ctx as originating from the Task tool.
+func WithTaskDispatch(ctx context.Context) context.Context {
+	return WithDispatchSource(ctx, DispatchSourceTaskTool)
+}
+
+func dispatchSource(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	value, ok := ctx.Value(dispatchSourceKey{}).(string)
+	if !ok {
+		return ""
+	}
+	return value
+}
+
 // Result captures handler output.
 type Result struct {
 	Subagent string
@@ -214,6 +247,9 @@ func (m *Manager) List() []Definition {
 // Dispatch selects and executes a subagent. When Target is empty, automatic
 // matchers choose the best candidate subject to priority/mutex ordering.
 func (m *Manager) Dispatch(ctx context.Context, req Request) (Result, error) {
+	if dispatchSource(ctx) != DispatchSourceTaskTool {
+		return Result{}, ErrDispatchUnauthorized
+	}
 	instruction := strings.TrimSpace(req.Instruction)
 	if instruction == "" {
 		return Result{}, ErrEmptyInstruction
@@ -225,6 +261,9 @@ func (m *Manager) Dispatch(ctx context.Context, req Request) (Result, error) {
 	runCtx := target.definition.BaseContext.Clone()
 	if len(req.Metadata) > 0 {
 		runCtx = runCtx.WithMetadata(req.Metadata)
+	}
+	if sessionID, ok := req.Metadata["session_id"].(string); ok {
+		runCtx = runCtx.WithSession(sessionID)
 	}
 	if len(req.ToolWhitelist) > 0 {
 		runCtx = runCtx.RestrictTools(req.ToolWhitelist...)

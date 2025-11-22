@@ -1,15 +1,19 @@
 package skills
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 
 	"gopkg.in/yaml.v3"
 )
@@ -31,6 +35,9 @@ type SkillFile struct {
 	Body         string
 	SupportFiles map[string]string
 }
+
+// readFile is swappable in tests to track filesystem IO.
+var readFile = os.ReadFile
 
 // SkillMetadata mirrors the YAML frontmatter fields inside SKILL.md.
 type SkillMetadata struct {
@@ -150,10 +157,6 @@ func loadSkillDir(root string) ([]SkillFile, []error) {
 			return nil
 		}
 
-		support, supportErrs := loadSupportFiles(filepath.Dir(path))
-		errs = append(errs, supportErrs...)
-		file.SupportFiles = support
-
 		results = append(results, file)
 		return nil
 	})
@@ -164,13 +167,9 @@ func loadSkillDir(root string) ([]SkillFile, []error) {
 }
 
 func parseSkillFile(path, dirName string) (SkillFile, error) {
-	data, err := os.ReadFile(path)
+	meta, err := readFrontMatter(path)
 	if err != nil {
 		return SkillFile{}, fmt.Errorf("skills: read %s: %w", path, err)
-	}
-	meta, body, err := parseFrontMatter(string(data))
-	if err != nil {
-		return SkillFile{}, fmt.Errorf("skills: parse %s: %w", path, err)
 	}
 	if meta.Name != "" && dirName != "" && meta.Name != dirName {
 		return SkillFile{}, fmt.Errorf("skills: name %q does not match directory %q in %s", meta.Name, dirName, path)
@@ -183,8 +182,50 @@ func parseSkillFile(path, dirName string) (SkillFile, error) {
 		Name:     meta.Name,
 		Path:     path,
 		Metadata: meta,
-		Body:     body,
 	}, nil
+}
+
+func readFrontMatter(path string) (SkillMetadata, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return SkillMetadata{}, err
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+	first, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return SkillMetadata{}, err
+	}
+
+	first = strings.TrimPrefix(first, "\uFEFF")
+	if strings.TrimSpace(first) != "---" {
+		return SkillMetadata{}, errors.New("missing YAML frontmatter")
+	}
+
+	var lines []string
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return SkillMetadata{}, readErr
+		}
+		if strings.TrimSpace(line) == "---" {
+			metaText := strings.Join(lines, "")
+			var meta SkillMetadata
+			if err := yaml.Unmarshal([]byte(metaText), &meta); err != nil {
+				return SkillMetadata{}, fmt.Errorf("decode YAML: %w", err)
+			}
+			return meta, nil
+		}
+
+		if line != "" {
+			lines = append(lines, line)
+		}
+
+		if errors.Is(readErr, io.EOF) {
+			return SkillMetadata{}, errors.New("missing closing frontmatter separator")
+		}
+	}
 }
 
 func parseFrontMatter(content string) (SkillMetadata, string, error) {
@@ -241,7 +282,7 @@ func loadSupportFiles(dir string) (map[string]string, []error) {
 
 	readOptional := func(name string) {
 		path := filepath.Join(dir, name)
-		data, err := os.ReadFile(path)
+		data, err := readFile(path)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
 				errs = append(errs, fmt.Errorf("skills: read %s: %w", path, err))
@@ -276,7 +317,7 @@ func loadSupportFiles(dir string) (map[string]string, []error) {
 			if d.IsDir() {
 				return nil
 			}
-			data, err := os.ReadFile(path)
+			data, err := readFile(path)
 			if err != nil {
 				errs = append(errs, fmt.Errorf("skills: read %s: %w", path, err))
 				return nil
@@ -313,29 +354,114 @@ func buildDefinitionMetadata(file SkillFile) map[string]string {
 }
 
 func buildHandler(file SkillFile) Handler {
-	output := map[string]any{
-		"body": file.Body,
+	return &lazySkillHandler{
+		loader: func() (Result, error) {
+			return loadSkillContent(file)
+		},
 	}
-	if len(file.SupportFiles) > 0 {
-		output["support_files"] = file.SupportFiles
+}
+
+func loadSkillContent(file SkillFile) (Result, error) {
+	body, err := loadSkillBody(file.Path)
+	if err != nil {
+		return Result{}, err
 	}
 
-	return HandlerFunc(func(_ context.Context, _ ActivationContext) (Result, error) {
-		res := Result{
-			Skill:  file.Metadata.Name,
-			Output: output,
-		}
-		meta := map[string]any{}
-		if file.Metadata.AllowedTools != "" {
-			meta["allowed-tools"] = strings.TrimSpace(file.Metadata.AllowedTools)
-		}
-		meta["source"] = file.Path
-		if len(file.SupportFiles) > 0 {
-			meta["support-file-count"] = len(file.SupportFiles)
-		}
-		if len(meta) > 0 {
-			res.Metadata = meta
-		}
-		return res, nil
+	support, supportErrs := loadSupportFiles(filepath.Dir(file.Path))
+	if err := errors.Join(supportErrs...); err != nil {
+		return Result{}, err
+	}
+
+	output := map[string]any{"body": body}
+	meta := map[string]any{}
+
+	allowed := strings.TrimSpace(file.Metadata.AllowedTools)
+	if allowed != "" {
+		meta["allowed-tools"] = allowed
+	}
+	meta["source"] = file.Path
+
+	if len(support) > 0 {
+		output["support_files"] = support
+		meta["support-file-count"] = len(support)
+	}
+
+	if len(meta) == 0 {
+		meta = nil
+	}
+
+	return Result{
+		Skill:    file.Metadata.Name,
+		Output:   output,
+		Metadata: meta,
+	}, nil
+}
+
+func loadSkillBody(path string) (string, error) {
+	data, err := readFile(path)
+	if err != nil {
+		return "", fmt.Errorf("skills: read %s: %w", path, err)
+	}
+	_, body, err := parseFrontMatter(string(data))
+	if err != nil {
+		return "", fmt.Errorf("skills: parse %s: %w", path, err)
+	}
+	return body, nil
+}
+
+// SetReadFileForTest swaps the file reader; intended for white-box tests only.
+func SetReadFileForTest(fn func(string) ([]byte, error)) (restore func()) {
+	prev := readFile
+	readFile = fn
+	return func() {
+		readFile = prev
+	}
+}
+
+// lazySkillHandler defers loading the skill body until first execution while
+// exposing a cheap loaded-body length probe for observability.
+type lazySkillHandler struct {
+	once    sync.Once
+	loader  func() (Result, error)
+	cached  Result
+	loadErr error
+	loaded  atomic.Bool
+}
+
+func (h *lazySkillHandler) Execute(_ context.Context, _ ActivationContext) (Result, error) {
+	if h == nil || h.loader == nil {
+		return Result{}, errors.New("skills: handler is nil")
+	}
+	h.once.Do(func() {
+		h.cached, h.loadErr = h.loader()
+		h.loaded.Store(true)
 	})
+	if h.loadErr != nil {
+		return Result{}, h.loadErr
+	}
+	return h.cached, nil
+}
+
+// BodyLength reports the cached body length without triggering a load. The
+// second return value indicates whether a body has been loaded.
+func (h *lazySkillHandler) BodyLength() (int, bool) {
+	if h == nil || !h.loaded.Load() {
+		return 0, false
+	}
+	return skillBodyLength(h.cached), true
+}
+
+func skillBodyLength(res Result) int {
+	if res.Output == nil {
+		return 0
+	}
+	if output, ok := res.Output.(map[string]any); ok {
+		if body, ok := output["body"].(string); ok {
+			return len(body)
+		}
+		if raw, ok := output["body"].([]byte); ok {
+			return len(raw)
+		}
+	}
+	return 0
 }

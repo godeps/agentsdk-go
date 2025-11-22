@@ -219,6 +219,59 @@ func TestLoadFromFS_Errors(t *testing.T) {
 	}
 }
 
+func TestLoadFromFS_ModelValidationError(t *testing.T) {
+	root := t.TempDir()
+	mustWrite(t, root, ".claude/agents/invalid-model.md", strings.Join([]string{
+		"---",
+		"name: invalid-model",
+		"description: bad model",
+		"model: delta",
+		"---",
+		"body",
+	}, "\n"))
+
+	regs, errs := LoadFromFS(LoaderOptions{ProjectRoot: root})
+	if len(regs) != 0 {
+		t.Fatalf("expected registrations to be skipped, got %d", len(regs))
+	}
+	if !hasError(errs, "invalid model") {
+		t.Fatalf("expected invalid model error, got %v", errs)
+	}
+}
+
+func TestValidateMetadataRejectsInvalidFields(t *testing.T) {
+	meta := SubagentMetadata{Name: "ok", Description: "desc", Model: "unknown"}
+	if err := validateMetadata(meta); err == nil || !strings.Contains(err.Error(), "invalid model") {
+		t.Fatalf("expected invalid model error, got %v", err)
+	}
+	meta.Model = "sonnet"
+	meta.PermissionMode = "illegal"
+	if err := validateMetadata(meta); err == nil || !strings.Contains(err.Error(), "invalid permissionMode") {
+		t.Fatalf("expected invalid permission error, got %v", err)
+	}
+}
+
+func TestNormalizeModelBoundaries(t *testing.T) {
+	if model, err := normalizeModel("inherit"); err != nil || model != "" {
+		t.Fatalf("inherit should return empty, got %q err=%v", model, err)
+	}
+	if _, err := normalizeModel("unknown"); err == nil {
+		t.Fatal("expected error for unknown model")
+	}
+}
+
+func TestLoadSubagentDirRejectsFilePath(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "notdir")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	_, errs := loadSubagentDir(file)
+	if len(errs) == 0 || !strings.Contains(errs[0].Error(), "not a directory") {
+		t.Fatalf("expected directory error, got %v", errs)
+	}
+}
+
 func mustWrite(t *testing.T, root, relative, content string) string {
 	t.Helper()
 	path := join(root, relative)

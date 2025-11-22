@@ -43,6 +43,16 @@ func (c Context) WithMetadata(meta map[string]any) Context {
 	return c
 }
 
+// WithSession sets the session identifier when provided.
+func (c Context) WithSession(id string) Context {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return c
+	}
+	c.SessionID = id
+	return c
+}
+
 // RestrictTools narrows the tool whitelist to the provided names.
 func (c Context) RestrictTools(tools ...string) Context {
 	cleaned := normalizeTools(tools)

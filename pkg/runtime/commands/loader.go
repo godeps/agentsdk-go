@@ -1,9 +1,11 @@
 package commands
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -11,8 +13,16 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"gopkg.in/yaml.v3"
+)
+
+var (
+	readFile = os.ReadFile
+	openFile = os.Open
+	statFile = os.Stat
 )
 
 // LoaderOptions controls how commands are discovered from the filesystem.
@@ -27,7 +37,6 @@ type CommandFile struct {
 	Name     string
 	Path     string
 	Metadata CommandMetadata
-	Body     string
 }
 
 // CommandMetadata describes optional YAML frontmatter fields.
@@ -159,11 +168,7 @@ func loadCommandDir(root string) (map[string]CommandFile, []error) {
 }
 
 func parseCommandFile(path, name string) (CommandFile, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return CommandFile{}, fmt.Errorf("commands: read %s: %w", path, err)
-	}
-	meta, body, err := parseFrontMatter(string(data))
+	meta, err := readFrontMatterMetadata(path)
 	if err != nil {
 		return CommandFile{}, fmt.Errorf("commands: parse %s: %w", path, err)
 	}
@@ -171,8 +176,48 @@ func parseCommandFile(path, name string) (CommandFile, error) {
 		Name:     name,
 		Path:     path,
 		Metadata: meta,
-		Body:     body,
 	}, nil
+}
+
+func readFrontMatterMetadata(path string) (CommandMetadata, error) {
+	file, err := openFile(path)
+	if err != nil {
+		return CommandMetadata{}, fmt.Errorf("commands: read %s: %w", path, err)
+	}
+	defer file.Close()
+
+	reader := bufio.NewReader(file)
+	first, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return CommandMetadata{}, err
+	}
+
+	first = strings.TrimPrefix(first, "\uFEFF")
+	if strings.TrimSpace(first) != "---" {
+		return CommandMetadata{}, nil
+	}
+
+	var lines []string
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return CommandMetadata{}, readErr
+		}
+		if strings.TrimSpace(line) == "---" {
+			metaText := strings.Join(lines, "")
+			var meta CommandMetadata
+			if err := yaml.Unmarshal([]byte(metaText), &meta); err != nil {
+				return CommandMetadata{}, fmt.Errorf("decode YAML: %w", err)
+			}
+			return meta, nil
+		}
+		if line != "" {
+			lines = append(lines, line)
+		}
+		if errors.Is(readErr, io.EOF) {
+			return CommandMetadata{}, errors.New("commands: missing closing frontmatter separator")
+		}
+	}
 }
 
 func parseFrontMatter(content string) (CommandMetadata, string, error) {
@@ -204,13 +249,69 @@ func parseFrontMatter(content string) (CommandMetadata, string, error) {
 	return meta, body, nil
 }
 
+type lazyCommandBody struct {
+	path     string
+	metadata CommandMetadata
+
+	mu         sync.Mutex
+	body       string
+	loadedMeta CommandMetadata
+	loaded     bool
+	modTime    time.Time
+}
+
+func (l *lazyCommandBody) load() (string, CommandMetadata, error) {
+	info, err := statFile(l.path)
+	if err != nil {
+		return "", CommandMetadata{}, fmt.Errorf("commands: stat %s: %w", l.path, err)
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.loaded && !info.ModTime().After(l.modTime) {
+		return l.body, l.loadedMetaOrFallback(), nil
+	}
+
+	data, err := readFile(l.path)
+	if err != nil {
+		return "", CommandMetadata{}, fmt.Errorf("commands: read %s: %w", l.path, err)
+	}
+
+	meta, body, err := parseFrontMatter(string(data))
+	if err != nil {
+		return "", CommandMetadata{}, fmt.Errorf("commands: parse %s: %w", l.path, err)
+	}
+
+	l.body = body
+	l.loadedMeta = meta
+	l.loaded = true
+	l.modTime = info.ModTime()
+
+	return l.body, l.loadedMetaOrFallback(), nil
+}
+
+func (l *lazyCommandBody) loadedMetaOrFallback() CommandMetadata {
+	if l.loadedMeta != (CommandMetadata{}) {
+		return l.loadedMeta
+	}
+	return l.metadata
+}
+
 func buildHandler(file CommandFile) Handler {
-	metadata := buildMetadataMap(file.Metadata, file.Path)
-	body := file.Body
+	loader := &lazyCommandBody{
+		path:     file.Path,
+		metadata: file.Metadata,
+	}
 
 	return HandlerFunc(func(_ context.Context, inv Invocation) (Result, error) {
+		body, meta, err := loader.load()
+		if err != nil {
+			return Result{}, err
+		}
 		rendered := applyArguments(body, inv.Args)
 		res := Result{Output: rendered}
+		metadata := buildMetadataMap(meta, file.Path)
 		if len(metadata) > 0 {
 			res.Metadata = metadata
 		}
@@ -257,4 +358,27 @@ func applyArguments(body string, args []string) string {
 		}
 		return args[idx-1]
 	})
+}
+
+// SetCommandFileOpsForTest swaps filesystem helpers; intended for white-box tests only.
+func SetCommandFileOpsForTest(
+	read func(string) ([]byte, error),
+	open func(string) (*os.File, error),
+	stat func(string) (fs.FileInfo, error),
+) (restore func()) {
+	prevRead, prevOpen, prevStat := readFile, openFile, statFile
+	if read != nil {
+		readFile = read
+	}
+	if open != nil {
+		openFile = open
+	}
+	if stat != nil {
+		statFile = stat
+	}
+	return func() {
+		readFile = prevRead
+		openFile = prevOpen
+		statFile = prevStat
+	}
 }

@@ -3,10 +3,16 @@ package subagents
 import (
 	"context"
 	"errors"
+	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
 )
+
+func taskDispatchCtx() context.Context {
+	return WithTaskDispatch(context.Background())
+}
 
 func TestManagerRegisterAndDispatchTarget(t *testing.T) {
 	m := NewManager()
@@ -23,7 +29,7 @@ func TestManagerRegisterAndDispatchTarget(t *testing.T) {
 		t.Fatalf("expected duplicate error")
 	}
 
-	res, err := m.Dispatch(context.Background(), Request{Target: "code", Instruction: "run", ToolWhitelist: []string{"bash"}})
+	res, err := m.Dispatch(taskDispatchCtx(), Request{Target: "code", Instruction: "run", ToolWhitelist: []string{"bash"}})
 	if err != nil {
 		t.Fatalf("dispatch failed: %v", err)
 	}
@@ -33,6 +39,22 @@ func TestManagerRegisterAndDispatchTarget(t *testing.T) {
 	}
 	if res.Subagent != "code" || res.Output != "child" || tools[0] != "bash" {
 		t.Fatalf("unexpected result: %+v", res)
+	}
+}
+
+func TestManagerDispatchRequiresTaskToolSource(t *testing.T) {
+	m := NewManager()
+	if err := m.Register(Definition{Name: "code"}, HandlerFunc(func(context.Context, Context, Request) (Result, error) {
+		return Result{Output: "ok"}, nil
+	})); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if _, err := m.Dispatch(context.Background(), Request{Target: "code", Instruction: "run"}); !errors.Is(err, ErrDispatchUnauthorized) {
+		t.Fatalf("expected unauthorized error, got %v", err)
+	}
+	if _, err := m.Dispatch(taskDispatchCtx(), Request{Target: "code", Instruction: "run"}); err != nil {
+		t.Fatalf("authorized dispatch failed: %v", err)
 	}
 }
 
@@ -56,7 +78,7 @@ func TestManagerAutoMatchPriorityAndMutex(t *testing.T) {
 		t.Fatalf("register other: %v", err)
 	}
 
-	res, err := m.Dispatch(context.Background(), Request{Instruction: "deploy", Activation: skills.ActivationContext{Prompt: "deploy prod"}})
+	res, err := m.Dispatch(taskDispatchCtx(), Request{Instruction: "deploy", Activation: skills.ActivationContext{Prompt: "deploy prod"}})
 	if err != nil {
 		t.Fatalf("dispatch match failed: %v", err)
 	}
@@ -64,12 +86,12 @@ func TestManagerAutoMatchPriorityAndMutex(t *testing.T) {
 		t.Fatalf("expected high priority selection, got %s", res.Subagent)
 	}
 
-	_, err = m.Dispatch(context.Background(), Request{Instruction: "deploy", Activation: skills.ActivationContext{Prompt: "missing"}})
+	_, err = m.Dispatch(taskDispatchCtx(), Request{Instruction: "deploy", Activation: skills.ActivationContext{Prompt: "missing"}})
 	if !errors.Is(err, ErrNoMatchingSubagent) {
 		t.Fatalf("expected no match error, got %v", err)
 	}
 
-	_, err = m.Dispatch(context.Background(), Request{Instruction: "", Activation: skills.ActivationContext{Prompt: "deploy"}})
+	_, err = m.Dispatch(taskDispatchCtx(), Request{Instruction: "", Activation: skills.ActivationContext{Prompt: "deploy"}})
 	if !errors.Is(err, ErrEmptyInstruction) {
 		t.Fatalf("expected empty instruction error")
 	}
@@ -77,7 +99,7 @@ func TestManagerAutoMatchPriorityAndMutex(t *testing.T) {
 
 func TestManagerUnknownTarget(t *testing.T) {
 	m := NewManager()
-	if _, err := m.Dispatch(context.Background(), Request{Target: "missing", Instruction: "run"}); !errors.Is(err, ErrUnknownSubagent) {
+	if _, err := m.Dispatch(taskDispatchCtx(), Request{Target: "missing", Instruction: "run"}); !errors.Is(err, ErrUnknownSubagent) {
 		t.Fatalf("expected unknown target error")
 	}
 
@@ -88,7 +110,7 @@ func TestManagerUnknownTarget(t *testing.T) {
 	if err := m.Register(Definition{Name: "direct"}, handler); err != nil {
 		t.Fatalf("register direct: %v", err)
 	}
-	res, err := m.Dispatch(context.Background(), Request{Target: "direct", Instruction: "run"})
+	res, err := m.Dispatch(taskDispatchCtx(), Request{Target: "direct", Instruction: "run"})
 	if err != nil || res.Subagent != "direct" {
 		t.Fatalf("expected direct dispatch, got %v %v", res, err)
 	}
@@ -166,7 +188,7 @@ func TestManagerValidationAndGuards(t *testing.T) {
 	})); err != nil {
 		t.Fatalf("register meta: %v", err)
 	}
-	if _, err := m.Dispatch(context.Background(), Request{Target: "meta", Instruction: "run", Metadata: map[string]any{"k": "v"}}); err != nil {
+	if _, err := m.Dispatch(taskDispatchCtx(), Request{Target: "meta", Instruction: "run", Metadata: map[string]any{"k": "v"}}); err != nil {
 		t.Fatalf("dispatch meta: %v", err)
 	}
 }
@@ -214,7 +236,7 @@ func TestManagerDispatchBuiltinTypeContext(t *testing.T) {
 	}
 
 	for _, tc := range cases {
-		res, err := m.Dispatch(context.Background(), Request{Target: tc.name, Instruction: "inspect"})
+		res, err := m.Dispatch(taskDispatchCtx(), Request{Target: tc.name, Instruction: "inspect"})
 		if err != nil {
 			t.Fatalf("dispatch %s: %v", tc.name, err)
 		}
@@ -255,7 +277,7 @@ func TestManagerDispatchRespectsExplicitWhitelist(t *testing.T) {
 		t.Fatalf("register explore: %v", err)
 	}
 
-	_, err := m.Dispatch(context.Background(), Request{
+	_, err := m.Dispatch(taskDispatchCtx(), Request{
 		Target:        TypeExplore,
 		Instruction:   "scan repo",
 		ToolWhitelist: []string{"read", "write", "glob"},
@@ -304,5 +326,147 @@ func TestBuiltinDefinitionsCatalog(t *testing.T) {
 	snapshot, _ := BuiltinDefinition(TypeExplore)
 	if len(snapshot.BaseContext.ToolWhitelist) != 3 {
 		t.Fatalf("expected definition cloning to protect catalog, got %+v", snapshot.BaseContext.ToolWhitelist)
+	}
+}
+
+func TestDispatchHandlerErrorSetsResultAndDefaults(t *testing.T) {
+	m := NewManager()
+	handlerErr := errors.New("boom")
+	if err := m.Register(Definition{Name: "err", DefaultModel: ModelHaiku}, HandlerFunc(func(ctx context.Context, subCtx Context, req Request) (Result, error) {
+		if subCtx.Model != ModelHaiku {
+			t.Fatalf("expected default model %s, got %s", ModelHaiku, subCtx.Model)
+		}
+		if subCtx.SessionID != "sess" {
+			t.Fatalf("session id not propagated: %+v", subCtx)
+		}
+		return Result{Metadata: map[string]any{"k": "v"}}, handlerErr
+	})); err != nil {
+		t.Fatalf("register err handler: %v", err)
+	}
+
+	ctx := WithDispatchSource(context.TODO(), DispatchSourceTaskTool)
+	res, err := m.Dispatch(ctx, Request{
+		Target:      "err",
+		Instruction: "do work",
+		Metadata:    map[string]any{"session_id": "  sess "},
+	})
+	if !errors.Is(err, handlerErr) {
+		t.Fatalf("expected handler error, got %v", err)
+	}
+	if res.Error == "" || res.Subagent != "err" {
+		t.Fatalf("unexpected result on error path: %+v", res)
+	}
+	if res.Metadata["k"] != "v" {
+		t.Fatalf("metadata should be cloned back: %+v", res.Metadata)
+	}
+}
+
+func TestContextHelpersAndFromContext(t *testing.T) {
+	var c Context
+	if c2 := c.WithMetadata(map[string]any{}); c2.Metadata != nil {
+		t.Fatalf("empty metadata should not allocate: %+v", c2.Metadata)
+	}
+	c = c.WithMetadata(map[string]any{"k": "v"})
+	if c.Metadata["k"] != "v" {
+		t.Fatalf("metadata merge failed: %+v", c.Metadata)
+	}
+	if c.WithSession("   ").SessionID != "" {
+		t.Fatalf("blank session id should be ignored")
+	}
+	withSession := c.WithSession(" session ")
+	if withSession.SessionID != "session" {
+		t.Fatalf("session trimming failed: %q", withSession.SessionID)
+	}
+
+	restricted := Context{ToolWhitelist: []string{"bash", "read"}}
+	restricted = restricted.RestrictTools(" read ", "", "write")
+	tools := restricted.ToolList()
+	if len(tools) != 1 || tools[0] != "read" {
+		t.Fatalf("unexpected restricted tools: %v", tools)
+	}
+	toolSet := toToolSet([]string{"", "READ", "read"})
+	if _, ok := toolSet["read"]; !ok || len(toolSet) != 1 {
+		t.Fatalf("toToolSet should ignore blanks and dedupe: %+v", toolSet)
+	}
+
+	if _, ok := FromContext(context.TODO()); ok {
+		t.Fatalf("nil context should not return subagent context")
+	}
+	if _, ok := FromContext(context.Background()); ok {
+		t.Fatalf("missing value should not be found")
+	}
+	injected := WithContext(context.Background(), withSession)
+	extracted, ok := FromContext(injected)
+	if !ok || extracted.SessionID != "session" || extracted.Metadata["k"] != "v" {
+		t.Fatalf("extracted context mismatch: %+v ok=%v", extracted, ok)
+	}
+	extracted.Metadata["k"] = "mutated"
+	recovered, _ := FromContext(injected)
+	if recovered.Metadata["k"] != "v" {
+		t.Fatalf("context should be cloned on read: %+v", recovered.Metadata)
+	}
+}
+
+func TestDispatchSourceHelpers(t *testing.T) {
+	if dispatchSource(context.TODO()) != "" {
+		t.Fatalf("nil context should return empty source")
+	}
+	ctx := WithDispatchSource(context.Background(), "")
+	if dispatchSource(ctx) != "" {
+		t.Fatalf("empty source should not be stored")
+	}
+	ctx = WithDispatchSource(context.TODO(), " task_tool ")
+	if dispatchSource(ctx) != DispatchSourceTaskTool {
+		t.Fatalf("task source should be normalized")
+	}
+	ctx = context.WithValue(context.Background(), dispatchSourceKey{}, 123)
+	if dispatchSource(ctx) != "" {
+		t.Fatalf("non-string source should be ignored")
+	}
+	if _, ok := BuiltinDefinition("missing"); ok {
+		t.Fatalf("unknown builtin should report false")
+	}
+	if err := (Definition{}).Validate(); err == nil {
+		t.Fatalf("blank name should fail validation")
+	}
+}
+
+func TestManagerDispatchConcurrent(t *testing.T) {
+	m := NewManager()
+	var counter int32
+	if err := m.Register(Definition{Name: "worker"}, HandlerFunc(func(ctx context.Context, subCtx Context, req Request) (Result, error) {
+		atomic.AddInt32(&counter, 1)
+		return Result{Output: req.Instruction}, nil
+	})); err != nil {
+		t.Fatalf("register worker: %v", err)
+	}
+
+	dispatchCtx := WithTaskDispatch(context.Background())
+	const workers = 16
+	var wg sync.WaitGroup
+	wg.Add(workers)
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		go func() {
+			defer wg.Done()
+			res, err := m.Dispatch(dispatchCtx, Request{Target: "worker", Instruction: "run"})
+			if err != nil {
+				errs <- err
+				return
+			}
+			if res.Subagent != "worker" || res.Output != "run" {
+				errs <- errors.New("unexpected dispatch result")
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent dispatch failed: %v", err)
+		}
+	}
+	if atomic.LoadInt32(&counter) != workers {
+		t.Fatalf("expected %d handler invocations, got %d", workers, counter)
 	}
 }

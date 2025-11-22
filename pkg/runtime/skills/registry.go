@@ -109,6 +109,14 @@ func (s *Skill) Execute(ctx context.Context, ac ActivationContext) (Result, erro
 	return res.clone(), nil
 }
 
+// Handler exposes the underlying skill handler for observability and testing.
+func (s *Skill) Handler() Handler {
+	if s == nil {
+		return nil
+	}
+	return s.handler
+}
+
 // Registry coordinates skill registration and activation.
 type Registry struct {
 	mu     sync.RWMutex
