@@ -462,3 +462,91 @@ func TestDisabledSandboxSkipsValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestCheckToolPermissionDisabledAndNil(t *testing.T) {
+	var nilSandbox *Sandbox
+	decision, err := nilSandbox.CheckToolPermission("Echo", nil)
+	if err != nil {
+		t.Fatalf("nil sandbox should not error: %v", err)
+	}
+	if decision.Action != PermissionAllow {
+		t.Fatalf("nil sandbox should allow by default, got %v", decision.Action)
+	}
+
+	disabled := NewDisabledSandbox()
+	res, err := disabled.CheckToolPermission("Echo", nil)
+	if err != nil {
+		t.Fatalf("disabled sandbox should not error: %v", err)
+	}
+	if res.Action != PermissionAllow {
+		t.Fatalf("disabled sandbox should allow, got %v", res.Action)
+	}
+	if audits := disabled.PermissionAudits(); len(audits) != 0 {
+		t.Fatalf("disabled sandbox should not record audits, got %v", audits)
+	}
+}
+
+func TestCheckToolPermissionUsesPreloadedMatcher(t *testing.T) {
+	root := tempDirClean(t)
+	sb := NewSandbox(root)
+	sb.permissions = &PermissionMatcher{
+		allow: []*permissionRule{
+			{raw: "Echo", tool: "Echo", match: func(string) bool { return true }},
+		},
+	}
+
+	decision, err := sb.CheckToolPermission("Echo", map[string]any{"target": "/tmp"})
+	if err != nil {
+		t.Fatalf("check permission: %v", err)
+	}
+	if decision.Action != PermissionAllow || decision.Rule != "Echo" {
+		t.Fatalf("expected preloaded allow rule, got %+v", decision)
+	}
+	if audits := sb.PermissionAudits(); len(audits) != 1 || audits[0].Rule != "Echo" {
+		t.Fatalf("expected single audit entry, got %+v", audits)
+	}
+}
+
+func TestCheckToolPermissionUnknownDoesNotAudit(t *testing.T) {
+	sb := NewSandbox(tempDirClean(t))
+	sb.permissions = &PermissionMatcher{}
+
+	decision, err := sb.CheckToolPermission("Custom", map[string]any{"target": "/tmp"})
+	if err != nil {
+		t.Fatalf("check permission: %v", err)
+	}
+	if decision.Action != PermissionUnknown {
+		t.Fatalf("expected unknown decision, got %+v", decision)
+	}
+	if len(sb.PermissionAudits()) != 0 {
+		t.Fatalf("no audits should be recorded for unknown decisions")
+	}
+}
+
+func TestCheckToolPermissionAllowsWhenMatcherNil(t *testing.T) {
+	sb := NewSandbox(tempDirClean(t))
+	sb.mu.Lock()
+	sb.permissions = nil
+	sb.permLoaded = true
+	sb.permErr = nil
+	sb.mu.Unlock()
+
+	decision, err := sb.CheckToolPermission("Anything", nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if decision.Action != PermissionAllow {
+		t.Fatalf("expected allow when matcher nil, got %+v", decision)
+	}
+}
+
+func TestNormalizePathHelpers(t *testing.T) {
+	empty := normalizePath("")
+	if empty != "" {
+		t.Fatalf("expected empty path to stay empty, got %q", empty)
+	}
+	relative := normalizePath("relative/path/../file")
+	if !filepath.IsAbs(relative) {
+		t.Fatalf("expected normalizePath to return absolute path, got %q", relative)
+	}
+}

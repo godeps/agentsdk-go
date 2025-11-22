@@ -163,3 +163,14 @@ func TestOpenNoFollowMissingPath(t *testing.T) {
 		t.Fatalf("expected missing path error, got %v", err)
 	}
 }
+
+func TestResolveRootPath(t *testing.T) {
+	resolver := NewPathResolver()
+	root, err := resolver.Resolve(string(filepath.Separator))
+	if err != nil {
+		t.Fatalf("resolve root: %v", err)
+	}
+	if root != string(filepath.Separator) {
+		t.Fatalf("expected root to resolve to %q, got %q", string(filepath.Separator), root)
+	}
+}

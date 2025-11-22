@@ -141,6 +141,13 @@ func TestApprovalQueueDenyFlow(t *testing.T) {
 	}
 }
 
+func TestApprovalQueueDenyMissingID(t *testing.T) {
+	q, _ := newTestQueue(t)
+	if _, err := q.Deny("missing", "ops", "reason"); err == nil || !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected not found error, got %v", err)
+	}
+}
+
 func TestApprovalQueueListPendingAndClone(t *testing.T) {
 	q, _ := newTestQueue(t)
 	first, err := q.Request("s1", "cmd1", nil)
@@ -326,6 +333,26 @@ func TestApprovalQueuePersistLockedNoStore(t *testing.T) {
 	}
 }
 
+func TestApprovalQueuePersistLockedRenameFailure(t *testing.T) {
+	dir := t.TempDir()
+	storeDir := filepath.Join(dir, "persist-dir")
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
+		t.Fatalf("mk dir: %v", err)
+	}
+
+	q := &ApprovalQueue{
+		storePath: storeDir, // rename onto a directory should fail
+		records: map[string]*ApprovalRecord{
+			"rid": {ID: "rid", SessionID: "s", Command: "ls", RequestedAt: time.Now()},
+		},
+		whitelist: make(map[string]time.Time),
+	}
+
+	if err := q.persistLocked(); err == nil {
+		t.Fatal("expected persist to fail when target is a directory")
+	}
+}
+
 func TestCloneRecordNilSafe(t *testing.T) {
 	if cloneRecord(nil) != nil {
 		t.Fatalf("expected nil clone for nil input")
@@ -345,5 +372,16 @@ func TestCloneRecordNilSafe(t *testing.T) {
 	rec.Paths[0] = "/tmp/mutated"
 	if cloned.Paths[0] == "/tmp/mutated" {
 		t.Fatalf("clone did not deep copy paths")
+	}
+}
+
+func TestNewApprovalIDProducesUniqueValues(t *testing.T) {
+	first := newApprovalID()
+	second := newApprovalID()
+	if first == "" || second == "" {
+		t.Fatal("approval id should not be empty")
+	}
+	if first == second {
+		t.Fatalf("expected unique ids, got %s", first)
 	}
 }
