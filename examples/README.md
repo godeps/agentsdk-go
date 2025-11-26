@@ -2,7 +2,7 @@
 
 # agentsdk-go Examples
 
-Four progressively richer examples. Run everything from the repo root.
+Five progressively richer examples. Run everything from the repo root.
 
 **Environment Setup**
 
@@ -27,6 +27,7 @@ export ANTHROPIC_API_KEY=sk-ant-your-key-here
 - `02-cli` (73 lines): CLI REPL with session history and optional config loading.
 - `03-http` (~300 lines): REST + SSE server on `:8080`, production-ready wiring.
 - `04-advanced` (~1400 lines): full stack with middleware, hooks, MCP, sandbox, skills, subagents.
+- `05-custom-tools` (~150 lines): selective built-in tools and custom tool registration.
 
 ## 01-basic — minimal entry
 - Purpose: fastest way to see the SDK loop in action with one request/response.
@@ -59,3 +60,12 @@ go run ./examples/03-http
 source .env
 go run ./examples/04-advanced --prompt "安全巡检" --enable-mcp=false
 ```
+
+## 05-custom-tools — custom tool registration
+- Key features: selective built-in tools (`EnabledBuiltinTools`), custom tool implementation (`CustomTools`), demonstrates tool filtering and registration.
+- Run:
+```bash
+source .env
+go run ./examples/05-custom-tools
+```
+- See [05-custom-tools/README.md](05-custom-tools/README.md) for detailed usage and custom tool implementation guide.

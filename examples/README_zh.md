@@ -2,7 +2,7 @@
 
 # agentsdk-go 示例
 
-四个分层示例，均可在仓库根目录运行。
+五个分层示例，均可在仓库根目录运行。
 
 **环境配置**
 
@@ -27,6 +27,7 @@ export ANTHROPIC_API_KEY=sk-ant-your-key-here
 - `02-cli`（73 行）：交互式 REPL，会话历史，可选读取 `.claude/settings.json`。
 - `03-http`（约 300 行）：REST + SSE 服务，监听 `:8080`，生产级组合。
 - `04-advanced`（约 1400 行）：全功能集成，包含 middleware、hooks、MCP、sandbox、skills、subagents。
+- `05-custom-tools`（约 150 行）：选择性内置工具和自定义工具注册。
 
 ## 01-basic — 最小入门
 - 目标：最快看到 SDK 核心循环，一次请求一次响应。
@@ -59,3 +60,12 @@ go run ./examples/03-http
 source .env
 go run ./examples/04-advanced --prompt "安全巡检" --enable-mcp=false
 ```
+
+## 05-custom-tools — 自定义工具注册
+- 关键特性：选择性内置工具（`EnabledBuiltinTools`）、自定义工具实现（`CustomTools`）、演示工具过滤与注册。
+- 运行：
+```bash
+source .env
+go run ./examples/05-custom-tools
+```
+- 详细用法和自定义工具实现指南见 [05-custom-tools/README.md](05-custom-tools/README.md)。

@@ -12,7 +12,7 @@ agentsdk-go 是一个模块化的 Agent 开发框架，实现了 Claude Code 的
 
 - 核心代码：约 20,300 行（生产代码，不含测试）
 - Agent 核心循环：189 行
-- 测试覆盖率：核心模块平均 90.5%（实际：subagents 91.7%，api 90.2%，mcp 90.3%，model 92.2%，sandbox 90.5%，security 90.4%）
+- 测试覆盖率：核心模块平均 90.6%（实际：subagents 91.7%，api 91.0%，mcp 90.3%，model 92.2%，sandbox 90.5%，security 90.4%）
 - 模块数量：13 个独立包
 - 外部依赖：anthropic-sdk-go、fsnotify、gopkg.in/yaml.v3、google/uuid、golang.org/x/mod、golang.org/x/net
 
@@ -186,9 +186,37 @@ for event := range events {
 }
 ```
 
+### 自定义工具注册
+
+选择要加载的内置工具并追加自定义工具：
+
+```go
+rt, err := api.New(ctx, api.Options{
+    ProjectRoot:         ".",
+    ModelFactory:        provider,
+    EnabledBuiltinTools: []string{"bash", "file_read"}, // nil=全部，空切片=禁用全部
+    CustomTools:         []tool.Tool{&EchoTool{}},      // 当 Tools 为空时追加
+})
+if err != nil {
+    log.Fatal(err)
+}
+defer rt.Close()
+```
+
+- `EnabledBuiltinTools`：nil→全部内置；空切片→禁用内置；非空→只启用列出的内置（大小写不敏感，下划线命名）。
+- `CustomTools`：追加自定义工具；当 `Tools` 非空时被忽略。
+- `Tools`：旧字段，非空时完全接管工具集（保持向后兼容）。
+
+完整示例见 `examples/05-custom-tools`。
+
 ## 示例
 
-当前仓库包含 10 个可运行示例：`cli`、`http`、`mcp`、`middleware`、`hooks`、`sandbox`、`skills`、`subagents`、`commands`、`plugins`。
+仓库包含 5 个渐进式示例：
+- `01-basic` - 最小化单次请求/响应
+- `02-cli` - 交互式 REPL，带会话历史
+- `03-http` - REST + SSE 服务器（`:8080`）
+- `04-advanced` - 完整流程（middleware、hooks、MCP、sandbox、skills、subagents）
+- `05-custom-tools` - 选择性内置工具 + 自定义工具注册
 
 ## 项目结构
 
@@ -216,16 +244,11 @@ agentsdk-go/
 │   └── security/               # 安全工具
 ├── cmd/cli/                    # CLI 入口
 ├── examples/                   # 示例代码
-│   ├── cli/                    # CLI 示例
-│   ├── http/                   # HTTP 服务器示例
-│   ├── mcp/                    # MCP 客户端示例
-│   ├── middleware/             # Middleware 示例
-│   ├── commands/               # Commands 示例
-│   ├── hooks/                  # Hooks 示例
-│   ├── sandbox/                # Sandbox 示例
-│   ├── skills/                 # Skills 示例
-│   ├── subagents/              # Subagents 示例
-│   └── plugins/                # Plugins 示例
+│   ├── 01-basic/               # 最小化单次请求/响应
+│   ├── 02-cli/                 # 交互式 REPL 带会话历史
+│   ├── 03-http/                # HTTP 服务器（REST + SSE）
+│   ├── 04-advanced/            # 完整流程（middleware、hooks、MCP、sandbox、skills、subagents）
+│   └── 05-custom-tools/        # 自定义工具注册与选择性内置工具
 ├── test/integration/           # 集成测试
 └── docs/                       # 文档
 ```
@@ -334,12 +357,12 @@ go tool cover -html=coverage.out
 | 模块 | 覆盖率 |
 |------|--------|
 | pkg/runtime/subagents | 91.7% |
-| pkg/api | 90.2% |
+| pkg/api | 91.0% |
 | pkg/mcp | 90.3% |
 | pkg/model | 92.2% |
 | pkg/sandbox | 90.5% |
 | pkg/security | 90.4% |
-| 平均 | 90.5% |
+| 平均 | 90.6% |
 
 ## 构建
 
@@ -367,15 +390,26 @@ make clean
 
 ## 内置工具
 
-SDK 包含以下内置工具（位于 `pkg/tool/builtin/`）：
+SDK 包含以下内置工具：
 
+### 核心工具（位于 `pkg/tool/builtin/`）
 - `bash` - 执行 shell 命令，支持工作目录和超时配置
-- `file_read` - 读取文件内容
-- `file_write` - 写入文件内容
+- `file_read` - 读取文件内容，支持 offset/limit
+- `file_write` - 写入文件内容（创建或覆盖）
+- `file_edit` - 编辑文件，字符串替换
 - `grep` - 正则搜索，支持递归和文件过滤
-- `glob` - 文件模式匹配
+- `glob` - 文件模式匹配，支持多个模式
 
-所有内置工具遵循沙箱策略，受路径白名单和命令验证器约束。
+### 扩展工具
+- `web_fetch` - 获取 Web 内容，基于提示词提取
+- `web_search` - Web 搜索，支持域名过滤
+- `bash_output` - 读取后台 bash 进程输出
+- `todo_write` - 任务跟踪与管理
+- `skill` - 执行 `.claude/skills/` 中的技能
+- `slash_command` - 执行 `.claude/commands/` 中的斜杠命令
+- `task` - 生成子代理处理复杂任务（仅 CLI/CI 模式）
+
+所有内置工具遵循沙箱策略，受路径白名单和命令验证器约束。使用 `EnabledBuiltinTools` 选择性启用工具，或使用 `CustomTools` 注册自定义实现。
 
 ## 安全机制
 
@@ -495,6 +529,7 @@ customMiddleware := middleware.Middleware{
 - [入门指南](docs/getting-started.md) - 分步教程
 - [API 参考](docs/api-reference.md) - API 文档
 - [安全实践](docs/security.md) - 安全配置指南
+- [自定义工具指南](docs/custom-tools-guide.md) - 自定义工具注册与使用
 - [HTTP API 指南](examples/03-http/README.md) - HTTP 服务器使用说明
 - [开发计划](.claude/specs/claude-code-rewrite/dev-plan.md) - 架构设计计划
 - [完成报告](.claude/specs/claude-code-rewrite/COMPLETION_REPORT.md) - 实现报告
