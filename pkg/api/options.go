@@ -124,12 +124,13 @@ type Options struct {
 	SettingsOverrides *config.Settings
 	SettingsLoader    *config.SettingsLoader
 
-	Model        model.Model
-	ModelFactory ModelFactory
-	SystemPrompt string
+		Model        model.Model
+		ModelFactory ModelFactory
+		SystemPrompt string
+		RulesEnabled *bool // nil = 默认启用，false = 禁用
 
-	Middleware        []middleware.Middleware
-	MiddlewareTimeout time.Duration
+		Middleware        []middleware.Middleware
+		MiddlewareTimeout time.Duration
 	MaxIterations     int
 	Timeout           time.Duration
 	TokenLimit        int

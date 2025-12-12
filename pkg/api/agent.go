@@ -60,6 +60,7 @@ type Runtime struct {
 	mode      ModeContext
 	settings  *config.Settings
 	cfg       *config.Settings
+	rulesLoader *config.RulesLoader
 	sandbox   *sandbox.Manager
 	sbRoot    string
 	registry  *tool.Registry
@@ -129,11 +130,23 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	recorder := defaultHookRecorder()
 	hooks := newHookExecutor(opts, recorder, settings)
 
+	var rulesLoader *config.RulesLoader
+	if opts.RulesEnabled == nil || (opts.RulesEnabled != nil && *opts.RulesEnabled) {
+		rulesLoader = config.NewRulesLoader(opts.ProjectRoot)
+		if _, err := rulesLoader.LoadRules(); err != nil {
+			log.Printf("rules loader warning: %v", err)
+		}
+		if err := rulesLoader.WatchChanges(nil); err != nil {
+			log.Printf("rules watcher warning: %v", err)
+		}
+	}
+
 	rt := &Runtime{
 		opts:      opts,
 		mode:      mode,
 		settings:  settings,
 		cfg:       projectConfigFromSettings(settings),
+		rulesLoader: rulesLoader,
 		sandbox:   sbox,
 		sbRoot:    sbRoot,
 		registry:  registry,
@@ -216,10 +229,16 @@ func (rt *Runtime) RunStream(ctx context.Context, req Request) (<-chan StreamEve
 
 // Close releases held resources.
 func (rt *Runtime) Close() error {
+	var err error
+	if rt.rulesLoader != nil {
+		if e := rt.rulesLoader.Close(); e != nil {
+			err = e
+		}
+	}
 	if rt.registry != nil {
 		rt.registry.Close()
 	}
-	return nil
+	return err
 }
 
 // Config returns the last loaded project config.
@@ -309,15 +328,16 @@ func (rt *Runtime) runAgent(prep preparedRun) (runResult, error) {
 }
 
 func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware.Middleware) (runResult, error) {
-	modelAdapter := &conversationModel{
-		base:         rt.mustModel(),
-		history:      prep.history,
-		prompt:       prep.prompt,
-		trimmer:      rt.newTrimmer(),
-		tools:        availableTools(rt.registry, prep.toolWhitelist),
-		systemPrompt: rt.opts.SystemPrompt,
-		hooks:        &runtimeHookAdapter{executor: rt.hooks, recorder: rt.recorder},
-	}
+		modelAdapter := &conversationModel{
+			base:         rt.mustModel(),
+			history:      prep.history,
+			prompt:       prep.prompt,
+			trimmer:      rt.newTrimmer(),
+			tools:        availableTools(rt.registry, prep.toolWhitelist),
+			systemPrompt: rt.opts.SystemPrompt,
+			rulesLoader:  rt.rulesLoader,
+			hooks:        &runtimeHookAdapter{executor: rt.hooks, recorder: rt.recorder},
+		}
 
 	toolExec := &runtimeToolExecutor{
 		executor: rt.executor,
@@ -645,6 +665,7 @@ type conversationModel struct {
 	trimmer      *message.Trimmer
 	tools        []model.ToolDefinition
 	systemPrompt string
+	rulesLoader  *config.RulesLoader
 	usage        model.Usage
 	stopReason   string
 	hooks        *runtimeHookAdapter
@@ -667,10 +688,16 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 	if m.trimmer != nil {
 		snapshot = m.trimmer.Trim(snapshot)
 	}
+	systemPrompt := m.systemPrompt
+	if m.rulesLoader != nil {
+		if rules := m.rulesLoader.GetContent(); rules != "" {
+			systemPrompt = fmt.Sprintf("%s\n\n## Project Rules\n\n%s", systemPrompt, rules)
+		}
+	}
 	req := model.Request{
 		Messages:    convertMessages(snapshot),
 		Tools:       m.tools,
-		System:      m.systemPrompt,
+		System:      systemPrompt,
 		MaxTokens:   0,
 		Model:       "",
 		Temperature: nil,
