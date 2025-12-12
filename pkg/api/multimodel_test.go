@@ -123,7 +123,10 @@ func TestSelectModelForTool(t *testing.T) {
 
 	for _, tt := range tests {
 		mdl, tier := rt.selectModelForTool(tt.toolName)
-		mock := mdl.(*mockModel)
+		mock, ok := mdl.(*mockModel)
+		if !ok {
+			t.Fatalf("selectModelForTool(%q) returned non-mockModel type", tt.toolName)
+		}
 		if mock.name != tt.expectedName {
 			t.Errorf("selectModelForTool(%q) model = %q, want %q", tt.toolName, mock.name, tt.expectedName)
 		}
@@ -146,7 +149,10 @@ func TestSelectModelForToolNoPool(t *testing.T) {
 	}
 
 	mdl, tier := rt.selectModelForTool("grep")
-	mock := mdl.(*mockModel)
+	mock, ok := mdl.(*mockModel)
+	if !ok {
+		t.Fatal("selectModelForTool returned non-mockModel type")
+	}
 	if mock.name != "default" {
 		t.Errorf("selectModelForTool with no pool = %q, want default", mock.name)
 	}
@@ -169,7 +175,10 @@ func TestSelectModelForToolNoMapping(t *testing.T) {
 	}
 
 	mdl, tier := rt.selectModelForTool("grep")
-	mock := mdl.(*mockModel)
+	mock, ok := mdl.(*mockModel)
+	if !ok {
+		t.Fatal("selectModelForTool returned non-mockModel type")
+	}
 	if mock.name != "default" {
 		t.Errorf("selectModelForTool with no mapping = %q, want default", mock.name)
 	}
