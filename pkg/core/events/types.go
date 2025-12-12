@@ -13,6 +13,8 @@ type EventType string
 const (
 	PreToolUse        EventType = "PreToolUse"
 	PostToolUse       EventType = "PostToolUse"
+	PreCompact        EventType = "PreCompact"
+	ContextCompacted  EventType = "ContextCompacted"
 	UserPromptSubmit  EventType = "UserPromptSubmit"
 	SessionStart      EventType = "SessionStart"
 	SessionEnd        EventType = "SessionEnd"
@@ -20,6 +22,7 @@ const (
 	SubagentStart     EventType = "SubagentStart"
 	SubagentStop      EventType = "SubagentStop"
 	Notification      EventType = "Notification"
+	TokenUsage        EventType = "TokenUsage"
 	PermissionRequest EventType = "PermissionRequest"
 	ModelSelected     EventType = "ModelSelected"
 )
@@ -55,6 +58,23 @@ type ToolResultPayload struct {
 	Result   any
 	Duration time.Duration
 	Err      error
+}
+
+// PreCompactPayload is emitted before automatic context compaction.
+type PreCompactPayload struct {
+	EstimatedTokens int     `json:"estimated_tokens"`
+	TokenLimit      int     `json:"token_limit"`
+	Threshold       float64 `json:"threshold"`
+	PreserveCount   int     `json:"preserve_count"`
+}
+
+// ContextCompactedPayload is emitted after context compaction completes.
+type ContextCompactedPayload struct {
+	Summary               string `json:"summary"`
+	OriginalMessages      int    `json:"original_messages"`
+	PreservedMessages     int    `json:"preserved_messages"`
+	EstimatedTokensBefore int    `json:"estimated_tokens_before"`
+	EstimatedTokensAfter  int    `json:"estimated_tokens_after"`
 }
 
 // UserPromptPayload captures a user supplied prompt.
@@ -108,6 +128,18 @@ const (
 type NotificationPayload struct {
 	Message string
 	Meta    map[string]any
+}
+
+// TokenUsagePayload reports model token usage for a completed run.
+type TokenUsagePayload struct {
+	InputTokens   int64  `json:"input_tokens"`
+	OutputTokens  int64  `json:"output_tokens"`
+	TotalTokens   int64  `json:"total_tokens"`
+	CacheCreation int64  `json:"cache_creation_input_tokens,omitempty"`
+	CacheRead     int64  `json:"cache_read_input_tokens,omitempty"`
+	Model         string `json:"model,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
+	RequestID     string `json:"request_id,omitempty"`
 }
 
 // ModelSelectedPayload is emitted when a model is selected for tool execution.

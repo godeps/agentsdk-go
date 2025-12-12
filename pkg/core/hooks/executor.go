@@ -362,6 +362,10 @@ func buildPayload(evt events.Event) ([]byte, error) {
 		envelope["tool_input"] = sanitizedToolInput(p)
 	case events.ToolResultPayload:
 		envelope["tool_response"] = sanitizedToolResult(p)
+	case events.PreCompactPayload:
+		envelope["pre_compact"] = p
+	case events.ContextCompactedPayload:
+		envelope["context_compacted"] = p
 	case events.SubagentStartPayload:
 		envelope["subagent_start"] = p
 	case events.SubagentStopPayload:
@@ -444,8 +448,9 @@ func extractToolName(payload any) string {
 
 func validateEvent(t events.EventType) error {
 	switch t {
-	case events.PreToolUse, events.PostToolUse, events.Notification, events.UserPromptSubmit,
-		events.SessionStart, events.SessionEnd, events.Stop,
+	case events.PreToolUse, events.PostToolUse, events.PreCompact, events.ContextCompacted,
+		events.Notification, events.UserPromptSubmit,
+		events.SessionStart, events.SessionEnd, events.Stop, events.TokenUsage,
 		events.SubagentStart, events.SubagentStop,
 		events.PermissionRequest, events.ModelSelected:
 		return nil

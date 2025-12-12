@@ -178,6 +178,16 @@ type Options struct {
 	Subagents []SubagentRegistration
 
 	Sandbox SandboxOptions
+
+	// TokenTracking enables token usage statistics collection.
+	// When true, the runtime tracks input/output tokens per session and model.
+	TokenTracking bool
+	// TokenCallback is invoked after each model call with usage stats.
+	// Only called when TokenTracking is true.
+	TokenCallback TokenCallback
+
+	// AutoCompact enables automatic context compaction for long sessions.
+	AutoCompact CompactConfig
 }
 
 // DefaultSubagentDefinitions exposes the built-in subagent type catalog so
@@ -269,6 +279,31 @@ func WithMaxSessions(n int) func(*Options) {
 		if n > 0 {
 			o.MaxSessions = n
 		}
+	}
+}
+
+// WithTokenTracking enables or disables token usage tracking.
+func WithTokenTracking(enabled bool) func(*Options) {
+	return func(o *Options) {
+		o.TokenTracking = enabled
+	}
+}
+
+// WithTokenCallback sets a callback function that is invoked after each model
+// call with the token usage statistics. Automatically enables TokenTracking.
+func WithTokenCallback(fn TokenCallback) func(*Options) {
+	return func(o *Options) {
+		o.TokenCallback = fn
+		if fn != nil {
+			o.TokenTracking = true
+		}
+	}
+}
+
+// WithAutoCompact configures automatic context compaction.
+func WithAutoCompact(config CompactConfig) func(*Options) {
+	return func(o *Options) {
+		o.AutoCompact = config
 	}
 }
 
