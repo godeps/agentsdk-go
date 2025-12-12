@@ -68,10 +68,12 @@ type Runtime struct {
 	hooks     *corehooks.Executor
 	histories *historyStore
 
-	cmdExec *commands.Executor
-	skReg   *skills.Registry
-	subMgr  *subagents.Manager
-	plugins []*plugins.ClaudePlugin
+	cmdExec   *commands.Executor
+	skReg     *skills.Registry
+	subMgr    *subagents.Manager
+	plugins   []*plugins.ClaudePlugin
+	tokens    *tokenTracker
+	compactor *compactor
 
 	mu sync.RWMutex
 }
@@ -128,6 +130,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 
 	recorder := defaultHookRecorder()
 	hooks := newHookExecutor(opts, recorder, settings)
+	compactor := newCompactor(opts.AutoCompact, opts.Model, opts.TokenLimit, hooks, recorder)
 
 	rt := &Runtime{
 		opts:      opts,
@@ -145,6 +148,8 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		skReg:     skReg,
 		subMgr:    subMgr,
 		plugins:   plugins,
+		tokens:    newTokenTracker(opts.TokenTracking, opts.TokenCallback),
+		compactor: compactor,
 	}
 
 	if taskTool != nil {
@@ -239,6 +244,22 @@ func (rt *Runtime) Settings() *config.Settings {
 // Sandbox exposes the sandbox manager.
 func (rt *Runtime) Sandbox() *sandbox.Manager { return rt.sandbox }
 
+// GetSessionStats returns aggregated token stats for a session.
+func (rt *Runtime) GetSessionStats(sessionID string) *SessionTokenStats {
+	if rt == nil || rt.tokens == nil {
+		return nil
+	}
+	return rt.tokens.GetSessionStats(sessionID)
+}
+
+// GetTotalStats returns aggregated token stats across all sessions.
+func (rt *Runtime) GetTotalStats() *SessionTokenStats {
+	if rt == nil || rt.tokens == nil {
+		return nil
+	}
+	return rt.tokens.GetTotalStats()
+}
+
 // ----------------- internal helpers -----------------
 
 type preparedRun struct {
@@ -317,6 +338,8 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 		tools:        availableTools(rt.registry, prep.toolWhitelist),
 		systemPrompt: rt.opts.SystemPrompt,
 		hooks:        &runtimeHookAdapter{executor: rt.hooks, recorder: rt.recorder},
+		compactor:    rt.compactor,
+		sessionID:    prep.normalized.SessionID,
 	}
 
 	toolExec := &runtimeToolExecutor{
@@ -358,6 +381,34 @@ func (rt *Runtime) runAgentWithMiddleware(prep preparedRun, extras ...middleware
 	out, err := ag.Run(prep.ctx, agentCtx)
 	if err != nil {
 		return runResult{}, err
+	}
+	if rt.tokens != nil && rt.tokens.IsEnabled() {
+		stats := tokenStatsFromUsage(modelAdapter.usage, "", prep.normalized.SessionID, "")
+		rt.tokens.Record(stats)
+		payload := coreevents.TokenUsagePayload{
+			InputTokens:   stats.InputTokens,
+			OutputTokens:  stats.OutputTokens,
+			TotalTokens:   stats.TotalTokens,
+			CacheCreation: stats.CacheCreation,
+			CacheRead:     stats.CacheRead,
+			Model:         stats.Model,
+			SessionID:     stats.SessionID,
+			RequestID:     stats.RequestID,
+		}
+		if rt.hooks != nil {
+			_ = rt.hooks.Publish(coreevents.Event{
+				Type:      coreevents.TokenUsage,
+				SessionID: stats.SessionID,
+				Payload:   payload,
+			})
+		}
+		if rt.recorder != nil {
+			rt.recorder.Record(coreevents.Event{
+				Type:      coreevents.TokenUsage,
+				SessionID: stats.SessionID,
+				Payload:   payload,
+			})
+		}
 	}
 	return runResult{output: out, usage: modelAdapter.usage, reason: modelAdapter.stopReason}, nil
 }
@@ -648,6 +699,8 @@ type conversationModel struct {
 	usage        model.Usage
 	stopReason   string
 	hooks        *runtimeHookAdapter
+	compactor    *compactor
+	sessionID    string
 }
 
 func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*agent.ModelOutput, error) {
@@ -661,6 +714,12 @@ func (m *conversationModel) Generate(ctx context.Context, _ *agent.Context) (*ag
 			return nil, err
 		}
 		m.prompt = ""
+	}
+
+	if m.compactor != nil {
+		if _, _, err := m.compactor.maybeCompact(ctx, m.history, m.sessionID); err != nil {
+			return nil, err
+		}
 	}
 
 	snapshot := m.history.All()
