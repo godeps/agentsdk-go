@@ -9,7 +9,7 @@ import (
 
 func TestLoadCommandDirMissingPath(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "missing")
-	results, errs := loadCommandDir(dir)
+	results, errs := loadCommandDir(dir, resolveFileOps(LoaderOptions{}), resolveWalkDirFunc(LoaderOptions{}))
 	if len(results) != 0 {
 		t.Fatalf("expected no results for missing dir")
 	}
@@ -22,7 +22,7 @@ func TestReadFrontMatterMetadataMissingClosing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "broken.md")
 	mustWrite(t, path, "---\ntitle: ok")
 
-	_, err := readFrontMatterMetadata(path)
+	_, err := readFrontMatterMetadata(path, resolveFileOps(LoaderOptions{}))
 	if err == nil || !strings.Contains(err.Error(), "missing closing frontmatter") {
 		t.Fatalf("expected missing closing error, got %v", err)
 	}

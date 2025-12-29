@@ -158,6 +158,38 @@ func TestLoadFromFS_YAML(t *testing.T) {
 	}
 }
 
+func TestLoadFromFS_MetadataNameOverride(t *testing.T) {
+	root := t.TempDir()
+	cmdDir := filepath.Join(root, ".claude", "commands", "test-folder")
+	if err := os.MkdirAll(cmdDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	body := strings.Join([]string{
+		"---",
+		"name: test-cmd",
+		"description: metadata name override",
+		"---",
+		"body",
+	}, "\n")
+	path := filepath.Join(cmdDir, "COMMAND.md")
+	mustWrite(t, path, body)
+
+	regs, errs := LoadFromFS(LoaderOptions{ProjectRoot: root})
+	if len(errs) != 0 {
+		t.Fatalf("unexpected errors: %v", errs)
+	}
+	if len(regs) != 1 {
+		t.Fatalf("expected 1 registration, got %d", len(regs))
+	}
+	if regs[0].Definition.Name != "test-cmd" {
+		t.Fatalf("expected metadata-provided name, got %q", regs[0].Definition.Name)
+	}
+	if regs[0].Definition.Description != "metadata name override" {
+		t.Fatalf("unexpected description %q", regs[0].Definition.Description)
+	}
+}
+
 func TestLoadFromFS_Errors(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, ".claude", "commands")
@@ -167,6 +199,13 @@ func TestLoadFromFS_Errors(t *testing.T) {
 
 	mustWrite(t, filepath.Join(dir, "bad name.md"), "invalid")
 	mustWrite(t, filepath.Join(dir, "broken.md"), "---\nfoo: [\n")
+	metaInvalid := strings.Join([]string{
+		"---",
+		"name: invalid name!",
+		"---",
+		"body",
+	}, "\n")
+	mustWrite(t, filepath.Join(dir, "meta-invalid.md"), metaInvalid)
 	mustWrite(t, filepath.Join(dir, "ok.md"), "hello")
 
 	regs, errs := LoadFromFS(LoaderOptions{ProjectRoot: root})

@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/cexll/agentsdk-go/pkg/config"
 )
 
 func TestLoadFromFS_Basic(t *testing.T) {
@@ -279,7 +281,8 @@ func TestLoadSubagentDirRejectsFilePath(t *testing.T) {
 	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
 		t.Fatalf("write file: %v", err)
 	}
-	_, errs := loadSubagentDir(file)
+	fsys := config.NewFS(root, nil)
+	_, errs := loadSubagentDir(file, fsys)
 	if len(errs) == 0 || !strings.Contains(errs[0].Error(), "not a directory") {
 		t.Fatalf("expected directory error, got %v", errs)
 	}

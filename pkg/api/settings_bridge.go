@@ -21,6 +21,7 @@ func loadSettings(opts Options) (*config.Settings, error) {
 		clone := *loader // avoid mutating caller-provided loader
 		loader = &clone
 	}
+	loader.FS = opts.fsLayer
 
 	if opts.SettingsOverrides != nil {
 		loader.RuntimeOverrides = config.MergeSettings(loader.RuntimeOverrides, opts.SettingsOverrides)

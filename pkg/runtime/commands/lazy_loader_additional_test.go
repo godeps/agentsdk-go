@@ -19,7 +19,7 @@ func TestLoadCommandDirNotDirectory(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	_, errs := loadCommandDir(commandsPath)
+	_, errs := loadCommandDir(commandsPath, resolveFileOps(LoaderOptions{}), resolveWalkDirFunc(LoaderOptions{}))
 	if len(errs) == 0 || !strings.Contains(errs[0].Error(), "not a directory") {
 		t.Fatalf("expected not-a-directory error, got %v", errs)
 	}
@@ -31,7 +31,7 @@ func TestReadFrontMatterMetadata_NoFrontmatter(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	meta, err := readFrontMatterMetadata(path)
+	meta, err := readFrontMatterMetadata(path, resolveFileOps(LoaderOptions{}))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -103,7 +103,7 @@ func TestLoadCommandDirDuplicateNames(t *testing.T) {
 	}
 	mustWrite(t, filepath.Join(dir, "subdir", "foo.md"), "two")
 
-	_, errs := loadCommandDir(dir)
+	_, errs := loadCommandDir(dir, resolveFileOps(LoaderOptions{}), resolveWalkDirFunc(LoaderOptions{}))
 	if len(errs) == 0 || !hasError(errs, "duplicate command") {
 		t.Fatalf("expected duplicate command error, got %v", errs)
 	}

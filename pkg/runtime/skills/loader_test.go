@@ -404,7 +404,7 @@ func TestLoadSkillDir_OnlyScansOneLevel(t *testing.T) {
 	}
 	writeSkill(t, filepath.Join(skillsRoot, "outer", "inner", "SKILL.md"), "inner", "body")
 
-	files, errs := loadSkillDir(skillsRoot)
+	files, errs := loadSkillDir(skillsRoot, nil)
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errors: %v", errs)
 	}

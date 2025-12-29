@@ -13,7 +13,7 @@ func TestReadFrontMatterMissingClosing(t *testing.T) {
 	path := filepath.Join(dir, "SKILL.md")
 	mustWrite(t, path, "---\nname: test\ndescription: desc\n")
 
-	if _, err := readFrontMatter(path); err == nil || !strings.Contains(err.Error(), "closing frontmatter") {
+	if _, err := readFrontMatter(path, nil); err == nil || !strings.Contains(err.Error(), "closing frontmatter") {
 		t.Fatalf("expected closing frontmatter error, got %v", err)
 	}
 }
@@ -100,7 +100,7 @@ func TestReadFrontMatterWithBOM(t *testing.T) {
 	path := filepath.Join(dir, "SKILL.md")
 	mustWrite(t, path, "\uFEFF---\nname: bom\ndescription: desc\n---\n")
 
-	meta, err := readFrontMatter(path)
+	meta, err := readFrontMatter(path, nil)
 	if err != nil {
 		t.Fatalf("unexpected err: %v", err)
 	}
@@ -127,7 +127,7 @@ func TestLoadSkillDirNotDirectory(t *testing.T) {
 		t.Fatalf("prep: %v", err)
 	}
 
-	_, errs := loadSkillDir(file)
+	_, errs := loadSkillDir(file, nil)
 	if len(errs) != 1 || !strings.Contains(errs[0].Error(), "not a directory") {
 		t.Fatalf("expected not a directory error, got %v", errs)
 	}
@@ -135,7 +135,7 @@ func TestLoadSkillDirNotDirectory(t *testing.T) {
 
 func TestLoadSkillDirMissing(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "not-there")
-	if result, errs := loadSkillDir(missing); result != nil || len(errs) != 0 {
+	if result, errs := loadSkillDir(missing, nil); result != nil || len(errs) != 0 {
 		t.Fatalf("expected nil results and no errors, got %v %v", result, errs)
 	}
 }

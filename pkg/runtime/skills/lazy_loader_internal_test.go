@@ -19,17 +19,6 @@ func TestHandlerLazyLoadsOnFirstExecute(t *testing.T) {
 	writeSkill(t, filepath.Join(dir, "SKILL.md"), "lazy", "lazy body")
 	mustWrite(t, filepath.Join(dir, "scripts", "setup.sh"), "echo hi")
 
-	calls := map[string]int{}
-	var mu sync.Mutex
-	original := readFile
-	restore := SetReadFileForTest(func(path string) ([]byte, error) {
-		mu.Lock()
-		calls[path]++
-		mu.Unlock()
-		return original(path)
-	})
-	defer restore()
-
 	regs, errs := LoadFromFS(LoaderOptions{ProjectRoot: root})
 	if len(errs) != 0 {
 		t.Fatalf("unexpected errs: %v", errs)
@@ -38,9 +27,10 @@ func TestHandlerLazyLoadsOnFirstExecute(t *testing.T) {
 		t.Fatalf("expected 1 reg, got %d", len(regs))
 	}
 
-	// Startup should not have touched the body or support files.
-	if len(calls) != 0 {
-		t.Fatalf("expected no readFile calls before execute, got %v", calls)
+	lazy := requireLazyHandler(t, regs[0].Handler)
+	callCount := trackLoaderCalls(lazy)
+	if got := callCount(); got != 0 {
+		t.Fatalf("expected zero loader calls before execute, got %d", got)
 	}
 
 	res, err := regs[0].Handler.Execute(context.Background(), ActivationContext{})
@@ -56,13 +46,8 @@ func TestHandlerLazyLoadsOnFirstExecute(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []string{"setup.sh"}, support["scripts"])
 
-	mu.Lock()
-	defer mu.Unlock()
-	if len(calls) != 1 {
-		t.Fatalf("expected a single SKILL.md read, got %v", calls)
-	}
-	if calls[filepath.Join(dir, "SKILL.md")] != 1 {
-		t.Fatalf("expected SKILL.md to be read once, got %d", calls[filepath.Join(dir, "SKILL.md")])
+	if got := callCount(); got != 1 {
+		t.Fatalf("expected single loader invocation, got %d", got)
 	}
 }
 
@@ -71,30 +56,19 @@ func TestHandlerCachesLoadResult(t *testing.T) {
 	dir := filepath.Join(root, ".claude", "skills", "cache")
 	writeSkill(t, filepath.Join(dir, "SKILL.md"), "cache", "cache body")
 
-	var mu sync.Mutex
-	calls := map[string]int{}
-	original := readFile
-	restore := SetReadFileForTest(func(path string) ([]byte, error) {
-		mu.Lock()
-		calls[path]++
-		mu.Unlock()
-		return original(path)
-	})
-	defer restore()
-
 	regs, _ := LoadFromFS(LoaderOptions{ProjectRoot: root})
-	res := regs[0].Handler
-	if _, err := res.Execute(context.Background(), ActivationContext{}); err != nil {
+	lazy := requireLazyHandler(t, regs[0].Handler)
+	callCount := trackLoaderCalls(lazy)
+
+	if _, err := lazy.Execute(context.Background(), ActivationContext{}); err != nil {
 		t.Fatalf("first execute failed: %v", err)
 	}
-	if _, err := res.Execute(context.Background(), ActivationContext{}); err != nil {
+	if _, err := lazy.Execute(context.Background(), ActivationContext{}); err != nil {
 		t.Fatalf("second execute failed: %v", err)
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	if calls[filepath.Join(dir, "SKILL.md")] != 1 {
-		t.Fatalf("expected single SKILL.md read, got %d", calls[filepath.Join(dir, "SKILL.md")])
+	if got := callCount(); got != 1 {
+		t.Fatalf("expected single loader execution, got %d", got)
 	}
 }
 
@@ -103,19 +77,10 @@ func TestHandlerConcurrentExecuteSingleLoad(t *testing.T) {
 	dir := filepath.Join(root, ".claude", "skills", "concurrent")
 	writeSkill(t, filepath.Join(dir, "SKILL.md"), "concurrent", "body")
 
-	var mu sync.Mutex
-	calls := map[string]int{}
-	original := readFile
-	restore := SetReadFileForTest(func(path string) ([]byte, error) {
-		mu.Lock()
-		calls[path]++
-		mu.Unlock()
-		return original(path)
-	})
-	defer restore()
-
 	regs, _ := LoadFromFS(LoaderOptions{ProjectRoot: root})
-	handler := regs[0].Handler
+	lazy := requireLazyHandler(t, regs[0].Handler)
+	callCount := trackLoaderCalls(lazy)
+	handler := Handler(lazy)
 
 	const goroutines = 16
 	var wg sync.WaitGroup
@@ -130,10 +95,8 @@ func TestHandlerConcurrentExecuteSingleLoad(t *testing.T) {
 	}
 	wg.Wait()
 
-	mu.Lock()
-	defer mu.Unlock()
-	if calls[filepath.Join(dir, "SKILL.md")] != 1 {
-		t.Fatalf("expected single SKILL.md read under concurrency, got %d", calls[filepath.Join(dir, "SKILL.md")])
+	if got := callCount(); got != 1 {
+		t.Fatalf("expected single loader execution under concurrency, got %d", got)
 	}
 }
 
@@ -142,22 +105,21 @@ func TestHandlerLoadErrorIsCached(t *testing.T) {
 	dir := filepath.Join(root, ".claude", "skills", "fail")
 	writeSkill(t, filepath.Join(dir, "SKILL.md"), "fail", "body")
 
-	var mu sync.Mutex
-	calls := map[string]int{}
-	original := readFile
-	restore := SetReadFileForTest(func(path string) ([]byte, error) {
-		mu.Lock()
-		calls[path]++
-		mu.Unlock()
-		if filepath.Base(path) == "SKILL.md" {
-			return nil, errors.New("boom")
-		}
-		return original(path)
-	})
-	defer restore()
-
 	regs, _ := LoadFromFS(LoaderOptions{ProjectRoot: root})
-	handler := regs[0].Handler
+	lazy := requireLazyHandler(t, regs[0].Handler)
+
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+	lazy.loader = func() (Result, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return Result{}, errors.New("boom")
+	}
+
+	handler := Handler(lazy)
 
 	if _, err := handler.Execute(context.Background(), ActivationContext{}); err == nil {
 		t.Fatalf("expected error on load")
@@ -168,8 +130,8 @@ func TestHandlerLoadErrorIsCached(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if calls[filepath.Join(dir, "SKILL.md")] != 1 {
-		t.Fatalf("expected single load attempt, got %d", calls[filepath.Join(dir, "SKILL.md")])
+	if calls != 1 {
+		t.Fatalf("expected single load attempt, got %d", calls)
 	}
 }
 
@@ -198,5 +160,33 @@ func TestHandlerBodyLengthProbe(t *testing.T) {
 
 	if size, loaded := sizer.BodyLength(); !loaded || size != len(body) {
 		t.Fatalf("expected loaded body length=%d loaded=%t, got %d %t", len(body), true, size, loaded)
+	}
+}
+
+func requireLazyHandler(t *testing.T, handler Handler) *lazySkillHandler {
+	t.Helper()
+	lazy, ok := handler.(*lazySkillHandler)
+	if !ok {
+		t.Fatalf("expected *lazySkillHandler, got %T", handler)
+	}
+	return lazy
+}
+
+func trackLoaderCalls(lazy *lazySkillHandler) func() int {
+	var (
+		mu    sync.Mutex
+		calls int
+	)
+	original := lazy.loader
+	lazy.loader = func() (Result, error) {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		return original()
+	}
+	return func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return calls
 	}
 }

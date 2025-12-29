@@ -15,6 +15,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/cexll/agentsdk-go/pkg/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -25,6 +26,9 @@ type LoaderOptions struct {
 	UserHome string
 	// Deprecated: user-level scanning has been removed; this flag is ignored.
 	EnableUser bool
+	// FS is the filesystem abstraction layer for loading skills.
+	// If nil, falls back to os.* functions for backward compatibility.
+	FS *config.FS
 }
 
 // SkillFile captures an on-disk SKILL.md entry.
@@ -32,6 +36,7 @@ type SkillFile struct {
 	Name     string
 	Path     string
 	Metadata SkillMetadata
+	fs       *config.FS
 }
 
 // readFile is swappable in tests to track filesystem IO.
@@ -121,8 +126,13 @@ func LoadFromFS(opts LoaderOptions) ([]SkillRegistration, []error) {
 		allFiles      []SkillFile
 	)
 
+	fsLayer := opts.FS
+	if fsLayer == nil {
+		fsLayer = config.NewFS(opts.ProjectRoot, nil)
+	}
+
 	projectDir := filepath.Join(opts.ProjectRoot, ".claude", "skills")
-	files, loadErrs := loadSkillDir(projectDir)
+	files, loadErrs := loadSkillDir(projectDir, fsLayer)
 	errs = append(errs, loadErrs...)
 	allFiles = append(allFiles, files...)
 
@@ -160,13 +170,17 @@ func LoadFromFS(opts LoaderOptions) ([]SkillRegistration, []error) {
 	return registrations, errs
 }
 
-func loadSkillDir(root string) ([]SkillFile, []error) {
+func loadSkillDir(root string, fsLayer *config.FS) ([]SkillFile, []error) {
 	var (
 		results []SkillFile
 		errs    []error
 	)
 
-	info, err := os.Stat(root)
+	if fsLayer == nil {
+		fsLayer = config.NewFS("", nil)
+	}
+
+	info, err := fsLayer.Stat(root)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil, nil
@@ -177,7 +191,7 @@ func loadSkillDir(root string) ([]SkillFile, []error) {
 		return nil, []error{fmt.Errorf("skills: path %s is not a directory", root)}
 	}
 
-	entries, err := os.ReadDir(root)
+	entries, err := fsLayer.ReadDir(root)
 	if err != nil {
 		return nil, []error{fmt.Errorf("skills: read dir %s: %w", root, err)}
 	}
@@ -189,7 +203,7 @@ func loadSkillDir(root string) ([]SkillFile, []error) {
 
 		dirName := entry.Name()
 		path := filepath.Join(root, dirName, "SKILL.md")
-		file, parseErr := parseSkillFile(path, dirName)
+		file, parseErr := parseSkillFile(path, dirName, fsLayer)
 		if parseErr != nil {
 			if errors.Is(parseErr, fs.ErrNotExist) {
 				continue
@@ -203,8 +217,8 @@ func loadSkillDir(root string) ([]SkillFile, []error) {
 	return results, errs
 }
 
-func parseSkillFile(path, dirName string) (SkillFile, error) {
-	meta, err := readFrontMatter(path)
+func parseSkillFile(path, dirName string, fsLayer *config.FS) (SkillFile, error) {
+	meta, err := readFrontMatter(path, fsLayer)
 	if err != nil {
 		return SkillFile{}, fmt.Errorf("skills: read %s: %w", path, err)
 	}
@@ -219,11 +233,20 @@ func parseSkillFile(path, dirName string) (SkillFile, error) {
 		Name:     meta.Name,
 		Path:     path,
 		Metadata: meta,
+		fs:       fsLayer,
 	}, nil
 }
 
-func readFrontMatter(path string) (SkillMetadata, error) {
-	file, err := os.Open(path)
+func readFrontMatter(path string, fsLayer *config.FS) (SkillMetadata, error) {
+	var (
+		file fs.File
+		err  error
+	)
+	if fsLayer != nil {
+		file, err = fsLayer.Open(path)
+	} else {
+		file, err = os.Open(path)
+	}
 	if err != nil {
 		return SkillMetadata{}, err
 	}
@@ -318,12 +341,20 @@ func validateMetadata(meta SkillMetadata) error {
 }
 
 func loadSupportFiles(dir string) (map[string][]string, []error) {
+	return loadSupportFilesWithFS(dir, nil)
+}
+
+func loadSupportFilesWithFS(dir string, fsLayer *config.FS) (map[string][]string, []error) {
 	out := map[string][]string{}
 	var errs []error
 
+	if fsLayer == nil {
+		fsLayer = config.NewFS("", nil)
+	}
+
 	for _, sub := range []string{"scripts", "references", "assets"} {
 		root := filepath.Join(dir, sub)
-		info, err := os.Stat(root)
+		info, err := fsLayer.Stat(root)
 		if err != nil {
 			if !errors.Is(err, fs.ErrNotExist) {
 				errs = append(errs, fmt.Errorf("skills: stat %s: %w", root, err))
@@ -336,7 +367,7 @@ func loadSupportFiles(dir string) (map[string][]string, []error) {
 		}
 
 		var files []string
-		if walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr := fsLayer.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				errs = append(errs, fmt.Errorf("skills: walk %s: %w", path, walkErr))
 				return nil
@@ -417,12 +448,12 @@ func buildHandler(file SkillFile) Handler {
 }
 
 func loadSkillContent(file SkillFile) (Result, error) {
-	body, err := loadSkillBody(file.Path)
+	body, err := loadSkillBodyFromFS(file.Path, file.fs)
 	if err != nil {
 		return Result{}, err
 	}
 
-	support, supportErrs := loadSupportFiles(filepath.Dir(file.Path))
+	support, supportErrs := loadSupportFilesWithFS(filepath.Dir(file.Path), file.fs)
 	if err := errors.Join(supportErrs...); err != nil {
 		return Result{}, err
 	}
@@ -456,7 +487,19 @@ func loadSkillContent(file SkillFile) (Result, error) {
 }
 
 func loadSkillBody(path string) (string, error) {
-	data, err := readFile(path)
+	return loadSkillBodyFromFS(path, nil)
+}
+
+func loadSkillBodyFromFS(path string, fsLayer *config.FS) (string, error) {
+	var (
+		data []byte
+		err  error
+	)
+	if fsLayer != nil {
+		data, err = fsLayer.ReadFile(path)
+	} else {
+		data, err = readFile(path)
+	}
 	if err != nil {
 		return "", fmt.Errorf("skills: read %s: %w", path, err)
 	}

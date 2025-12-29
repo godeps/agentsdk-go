@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
+	iofs "io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,6 +18,7 @@ import (
 type SettingsLoader struct {
 	ProjectRoot      string
 	RuntimeOverrides *Settings
+	FS               *FS
 }
 
 // Load resolves and merges settings across all layers.
@@ -44,7 +45,7 @@ func (l *SettingsLoader) Load() (*Settings, error) {
 	}
 
 	for _, layer := range layers {
-		if err := applySettingsLayer(&merged, layer.name, layer.path); err != nil {
+		if err := applySettingsLayer(&merged, layer.name, layer.path, l.FS); err != nil {
 			return nil, err
 		}
 	}
@@ -59,7 +60,7 @@ func (l *SettingsLoader) Load() (*Settings, error) {
 	}
 
 	managedPath := getManagedSettingsPath()
-	if err := applySettingsLayer(&merged, "managed", managedPath); err != nil {
+	if err := applySettingsLayer(&merged, "managed", managedPath, l.FS); err != nil {
 		return nil, err
 	}
 
@@ -95,13 +96,21 @@ func getLocalSettingsPath(root string) string {
 }
 
 // loadJSONFile decodes a settings JSON file. Missing files return (nil, nil).
-func loadJSONFile(path string) (*Settings, error) {
+func loadJSONFile(path string, filesystem *FS) (*Settings, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, nil
 	}
-	data, err := os.ReadFile(path)
+	var (
+		data []byte
+		err  error
+	)
+	if filesystem != nil {
+		data, err = filesystem.ReadFile(path)
+	} else {
+		data, err = os.ReadFile(path)
+	}
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
+		if errors.Is(err, iofs.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, err
@@ -113,12 +122,12 @@ func loadJSONFile(path string) (*Settings, error) {
 	return &s, nil
 }
 
-func applySettingsLayer(dst *Settings, name, path string) error {
+func applySettingsLayer(dst *Settings, name, path string, filesystem *FS) error {
 	if path == "" {
 		log.Printf("settings: %s layer skipped (no path)", name)
 		return nil
 	}
-	cfg, err := loadJSONFile(path)
+	cfg, err := loadJSONFile(path, filesystem)
 	if err != nil {
 		return fmt.Errorf("load %s settings: %w", name, err)
 	}

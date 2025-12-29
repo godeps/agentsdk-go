@@ -2,10 +2,8 @@ package skills_test
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
@@ -16,16 +14,6 @@ func TestLazyLoadViaRegistry(t *testing.T) {
 	dir := filepath.Join(root, ".claude", "skills", "ext")
 
 	writeSkill(t, filepath.Join(dir, "SKILL.md"), "ext", "body from registry")
-
-	calls := map[string]int{}
-	var mu sync.Mutex
-	restore := skills.SetReadFileForTest(func(path string) ([]byte, error) {
-		mu.Lock()
-		calls[path]++
-		mu.Unlock()
-		return os.ReadFile(path)
-	})
-	defer restore()
 
 	regs, errs := skills.LoadFromFS(skills.LoaderOptions{ProjectRoot: root})
 	if len(errs) != 0 {
@@ -39,9 +27,8 @@ func TestLazyLoadViaRegistry(t *testing.T) {
 		}
 	}
 
-	if len(calls) != 0 {
-		t.Fatalf("expected no reads at startup, got %v", calls)
-	}
+	updatedBody := "body loaded lazily"
+	writeSkill(t, filepath.Join(dir, "SKILL.md"), "ext", updatedBody)
 
 	res, err := registry.Execute(context.Background(), "ext", skills.ActivationContext{})
 	if err != nil {
@@ -51,14 +38,21 @@ func TestLazyLoadViaRegistry(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected output type: %T", res.Output)
 	}
-	if output["body"] != "body from registry" {
-		t.Fatalf("unexpected body: %#v", output["body"])
+	if output["body"] != updatedBody {
+		t.Fatalf("expected lazy body %q, got %#v", updatedBody, output["body"])
 	}
 
-	mu.Lock()
-	defer mu.Unlock()
-	if calls[filepath.Join(dir, "SKILL.md")] != 1 {
-		t.Fatalf("expected SKILL.md to be read once, got %d", calls[filepath.Join(dir, "SKILL.md")])
+	writeSkill(t, filepath.Join(dir, "SKILL.md"), "ext", "body after first execute")
+	resCached, err := registry.Execute(context.Background(), "ext", skills.ActivationContext{})
+	if err != nil {
+		t.Fatalf("execute cached: %v", err)
+	}
+	cachedOutput, ok := resCached.Output.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected cached output type: %T", resCached.Output)
+	}
+	if cachedOutput["body"] != updatedBody {
+		t.Fatalf("expected cached body %q, got %#v", updatedBody, cachedOutput["body"])
 	}
 }
 
@@ -67,17 +61,13 @@ func TestLazyLoadErrorPropagates(t *testing.T) {
 	dir := filepath.Join(root, ".claude", "skills", "err")
 	writeSkill(t, filepath.Join(dir, "SKILL.md"), "err", "body")
 
-	restore := skills.SetReadFileForTest(func(path string) ([]byte, error) {
-		if filepath.Base(path) == "SKILL.md" {
-			return nil, errors.New("io failure")
-		}
-		return os.ReadFile(path)
-	})
-	defer restore()
-
 	regs, errs := skills.LoadFromFS(skills.LoaderOptions{ProjectRoot: root})
 	if len(errs) != 0 {
 		t.Fatalf("unexpected load errs: %v", errs)
+	}
+
+	if err := os.Remove(filepath.Join(dir, "SKILL.md")); err != nil {
+		t.Fatalf("remove skill: %v", err)
 	}
 
 	registry := skills.NewRegistry()

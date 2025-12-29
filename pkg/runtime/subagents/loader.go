@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
 
+	"github.com/cexll/agentsdk-go/pkg/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,6 +21,7 @@ type LoaderOptions struct {
 	UserHome string
 	// Deprecated: user-level scanning has been removed; this flag is ignored.
 	EnableUser bool
+	FS         *config.FS
 }
 
 // SubagentFile captures an on-disk subagent definition.
@@ -68,8 +69,13 @@ func LoadFromFS(opts LoaderOptions) ([]SubagentRegistration, []error) {
 		merged        = map[string]SubagentFile{}
 	)
 
+	fsLayer := opts.FS
+	if fsLayer == nil {
+		fsLayer = config.NewFS(opts.ProjectRoot, nil)
+	}
+
 	projectDir := filepath.Join(opts.ProjectRoot, ".claude", "agents")
-	files, loadErrs := loadSubagentDir(projectDir)
+	files, loadErrs := loadSubagentDir(projectDir, fsLayer)
 	errs = append(errs, loadErrs...)
 	for name, file := range files {
 		merged[name] = file
@@ -113,11 +119,15 @@ func LoadFromFS(opts LoaderOptions) ([]SubagentRegistration, []error) {
 	return registrations, errs
 }
 
-func loadSubagentDir(root string) (map[string]SubagentFile, []error) {
+func loadSubagentDir(root string, fsLayer *config.FS) (map[string]SubagentFile, []error) {
 	results := map[string]SubagentFile{}
 	var errs []error
 
-	info, err := os.Stat(root)
+	if fsLayer == nil {
+		fsLayer = config.NewFS("", nil)
+	}
+
+	info, err := fsLayer.Stat(root)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return results, nil
@@ -128,7 +138,7 @@ func loadSubagentDir(root string) (map[string]SubagentFile, []error) {
 		return results, []error{fmt.Errorf("subagents: path %s is not a directory", root)}
 	}
 
-	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	walkErr := fsLayer.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			errs = append(errs, fmt.Errorf("subagents: walk %s: %w", path, walkErr))
 			return nil
@@ -141,7 +151,7 @@ func loadSubagentDir(root string) (map[string]SubagentFile, []error) {
 		}
 
 		fallback := strings.ToLower(strings.TrimSuffix(d.Name(), filepath.Ext(d.Name())))
-		file, parseErr := parseSubagentFile(path, fallback)
+		file, parseErr := parseSubagentFile(path, fallback, fsLayer)
 		if parseErr != nil {
 			errs = append(errs, parseErr)
 			return nil
@@ -159,8 +169,12 @@ func loadSubagentDir(root string) (map[string]SubagentFile, []error) {
 	return results, errs
 }
 
-func parseSubagentFile(path, fallback string) (SubagentFile, error) {
-	data, err := os.ReadFile(path)
+func parseSubagentFile(path, fallback string, fsLayer *config.FS) (SubagentFile, error) {
+	if fsLayer == nil {
+		fsLayer = config.NewFS("", nil)
+	}
+
+	data, err := fsLayer.ReadFile(path)
 	if err != nil {
 		return SubagentFile{}, fmt.Errorf("subagents: read %s: %w", path, err)
 	}

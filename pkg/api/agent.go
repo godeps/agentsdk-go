@@ -61,6 +61,7 @@ type Runtime struct {
 	mode        ModeContext
 	settings    *config.Settings
 	cfg         *config.Settings
+	fs          *config.FS
 	rulesLoader *config.RulesLoader
 	sandbox     *sandbox.Manager
 	sbRoot      string
@@ -95,6 +96,10 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 	opts = opts.withDefaults()
 	opts = opts.frozen()
 	mode := opts.modeContext()
+
+	// 初始化文件系统抽象层
+	fsLayer := config.NewFS(opts.ProjectRoot, opts.EmbedFS)
+	opts.fsLayer = fsLayer
 
 	settings, err := loadSettings(opts)
 	if err != nil {
@@ -167,6 +172,7 @@ func New(ctx context.Context, opts Options) (*Runtime, error) {
 		mode:        mode,
 		settings:    settings,
 		cfg:         projectConfigFromSettings(settings),
+		fs:          fsLayer,
 		rulesLoader: rulesLoader,
 		sandbox:     sbox,
 		sbRoot:      sbRoot,
@@ -385,6 +391,7 @@ type preparedRun struct {
 	recorder       *hookRecorder
 	commandResults []CommandExecution
 	skillResults   []SkillExecution
+	subagentResult *subagents.Result
 	mode           ModeContext
 	toolWhitelist  map[string]struct{}
 }
@@ -439,6 +446,12 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 	}
 	prompt = promptAfterSkills
 	activation.Prompt = prompt
+	subRes, promptAfterSubagent, err := rt.executeSubagent(ctx, prompt, activation, &normalized)
+	if err != nil {
+		return preparedRun{}, err
+	}
+	prompt = promptAfterSubagent
+	activation.Prompt = prompt
 	whitelist := combineToolWhitelists(normalized.ToolWhitelist, nil)
 	return preparedRun{
 		ctx:            ctx,
@@ -448,6 +461,7 @@ func (rt *Runtime) prepare(ctx context.Context, req Request) (preparedRun, error
 		recorder:       recorder,
 		commandResults: cmdRes,
 		skillResults:   skillRes,
+		subagentResult: subRes,
 		mode:           normalized.Mode,
 		toolWhitelist:  whitelist,
 	}, nil
@@ -584,6 +598,7 @@ func (rt *Runtime) buildResponse(prep preparedRun, result runResult) *Response {
 		Result:          convertRunResult(result),
 		CommandResults:  prep.commandResults,
 		SkillResults:    prep.skillResults,
+		Subagent:        prep.subagentResult,
 		HookEvents:      events,
 		ProjectConfig:   rt.Settings(),
 		Settings:        rt.Settings(),
@@ -742,8 +757,12 @@ func (rt *Runtime) executeSubagent(ctx context.Context, prompt string, activatio
 		Metadata:      meta,
 	}
 	dispatchCtx := ctx
+	if dispatchCtx == nil {
+		dispatchCtx = context.Background()
+	}
+	dispatchCtx = subagents.WithTaskDispatch(dispatchCtx)
 	if subCtx, ok := buildSubagentContext(*req, def, builtin); ok {
-		dispatchCtx = subagents.WithContext(ctx, subCtx)
+		dispatchCtx = subagents.WithContext(dispatchCtx, subCtx)
 	}
 	res, err := rt.subMgr.Dispatch(dispatchCtx, request)
 	if err != nil {

@@ -34,7 +34,7 @@ func loadWithManagedPath(t *testing.T, projectRoot, managedPath string, runtimeO
 	settings, err := loader.Load()
 	require.NoError(t, err)
 	if managedPath != "" {
-		require.NoError(t, applySettingsLayer(settings, "managed", managedPath))
+		require.NoError(t, applySettingsLayer(settings, "managed", managedPath, loader.FS))
 	}
 	return settings
 }
@@ -422,7 +422,7 @@ func TestSettingsLoaderMissingProjectRoot(t *testing.T) {
 }
 
 func TestLoadJSONFileMissingReturnsNil(t *testing.T) {
-	settings, err := loadJSONFile(filepath.Join(t.TempDir(), "missing.json"))
+	settings, err := loadJSONFile(filepath.Join(t.TempDir(), "missing.json"), nil)
 	require.NoError(t, err)
 	require.Nil(t, settings)
 }

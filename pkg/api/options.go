@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"maps"
 	"path/filepath"
 	"slices"
@@ -128,9 +129,13 @@ func (fn ModelFactoryFunc) Model(ctx context.Context) (model.Model, error) {
 
 // Options configures the unified SDK runtime.
 type Options struct {
-	EntryPoint        EntryPoint
-	Mode              ModeContext
-	ProjectRoot       string
+	EntryPoint  EntryPoint
+	Mode        ModeContext
+	ProjectRoot string
+	// EmbedFS 可选的嵌入文件系统，用于支持将 .claude 目录打包到二进制
+	// 当设置时，文件加载优先级为：OS 文件系统 > 嵌入 FS
+	// 这允许运行时通过创建本地文件来覆盖嵌入的默认配置
+	EmbedFS           fs.FS
 	SettingsPath      string
 	SettingsOverrides *config.Settings
 	SettingsLoader    *config.SettingsLoader
@@ -204,6 +209,8 @@ type Options struct {
 	// OTEL configures OpenTelemetry distributed tracing.
 	// Requires build tag 'otel' for actual instrumentation; otherwise no-op.
 	OTEL OTELConfig
+
+	fsLayer *config.FS
 }
 
 // DefaultSubagentDefinitions exposes the built-in subagent type catalog so

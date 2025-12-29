@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cexll/agentsdk-go/pkg/config"
 	"github.com/cexll/agentsdk-go/pkg/message"
 	"github.com/cexll/agentsdk-go/pkg/model"
 	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
@@ -151,6 +152,7 @@ type loaderOptions struct {
 	ProjectRoot string
 	UserHome    string
 	EnableUser  bool
+	fs          *config.FS
 }
 
 func buildLoaderOptions(opts Options) loaderOptions {
@@ -158,6 +160,7 @@ func buildLoaderOptions(opts Options) loaderOptions {
 		ProjectRoot: opts.ProjectRoot,
 		UserHome:    "",
 		EnableUser:  false,
+		fs:          opts.fsLayer,
 	}
 }
 
@@ -167,6 +170,7 @@ func buildCommandsExecutor(opts Options) (*commands.Executor, []error) {
 		ProjectRoot: loader.ProjectRoot,
 		UserHome:    loader.UserHome,
 		EnableUser:  loader.EnableUser,
+		FS:          loader.fs,
 	})
 
 	merged := mergeCommandRegistrations(fsRegs, opts.Commands, &errs)
@@ -218,6 +222,7 @@ func buildSkillsRegistry(opts Options) (*skills.Registry, []error) {
 		ProjectRoot: loader.ProjectRoot,
 		UserHome:    loader.UserHome,
 		EnableUser:  loader.EnableUser,
+		FS:          loader.fs,
 	})
 
 	merged := mergeSkillRegistrations(fsRegs, opts.Skills, &errs)
@@ -269,6 +274,7 @@ func buildSubagentsManager(opts Options) (*subagents.Manager, []error) {
 		ProjectRoot: loader.ProjectRoot,
 		UserHome:    loader.UserHome,
 		EnableUser:  false,
+		FS:          loader.fs,
 	})
 
 	merged := mergeSubagentRegistrations(opts.Subagents, projectRegs, &errs)

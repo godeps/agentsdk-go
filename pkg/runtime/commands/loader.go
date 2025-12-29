@@ -16,13 +16,25 @@ import (
 	"sync"
 	"time"
 
+	"github.com/cexll/agentsdk-go/pkg/config"
 	"gopkg.in/yaml.v3"
 )
 
+type fileOps struct {
+	readFile func(string) ([]byte, error)
+	openFile func(string) (fs.File, error)
+	statFile func(string) (fs.FileInfo, error)
+}
+
+type walkDirFunc func(string, fs.WalkDirFunc) error
+
 var (
-	readFile = os.ReadFile
-	openFile = os.Open
-	statFile = os.Stat
+	fileOpOverridesMu sync.RWMutex
+	fileOpOverrides   = struct {
+		read func(string) ([]byte, error)
+		open func(string) (*os.File, error)
+		stat func(string) (fs.FileInfo, error)
+	}{}
 )
 
 // LoaderOptions controls how commands are discovered from the filesystem.
@@ -32,6 +44,59 @@ type LoaderOptions struct {
 	UserHome string
 	// Deprecated: user-level scanning has been removed; this flag is ignored.
 	EnableUser bool
+	FS         *config.FS
+}
+
+func resolveFileOps(opts LoaderOptions) fileOps {
+	if opts.FS != nil {
+		return fileOps{
+			readFile: opts.FS.ReadFile,
+			openFile: opts.FS.Open,
+			statFile: opts.FS.Stat,
+		}
+	}
+	return fileOps{
+		readFile: readFileOverrideOrOS,
+		openFile: openFileOverrideOrOS,
+		statFile: statFileOverrideOrOS,
+	}
+}
+
+func readFileOverrideOrOS(path string) ([]byte, error) {
+	fileOpOverridesMu.RLock()
+	override := fileOpOverrides.read
+	fileOpOverridesMu.RUnlock()
+	if override != nil {
+		return override(path)
+	}
+	return os.ReadFile(path)
+}
+
+func openFileOverrideOrOS(path string) (fs.File, error) {
+	fileOpOverridesMu.RLock()
+	override := fileOpOverrides.open
+	fileOpOverridesMu.RUnlock()
+	if override != nil {
+		return override(path)
+	}
+	return os.Open(path)
+}
+
+func statFileOverrideOrOS(path string) (fs.FileInfo, error) {
+	fileOpOverridesMu.RLock()
+	override := fileOpOverrides.stat
+	fileOpOverridesMu.RUnlock()
+	if override != nil {
+		return override(path)
+	}
+	return os.Stat(path)
+}
+
+func resolveWalkDirFunc(opts LoaderOptions) walkDirFunc {
+	if opts.FS != nil {
+		return opts.FS.WalkDir
+	}
+	return filepath.WalkDir
 }
 
 // CommandFile captures an on-disk command definition.
@@ -43,6 +108,7 @@ type CommandFile struct {
 
 // CommandMetadata describes optional YAML frontmatter fields.
 type CommandMetadata struct {
+	Name                   string `yaml:"name"`
 	Description            string `yaml:"description"`
 	AllowedTools           string `yaml:"allowed-tools"`
 	ArgumentHint           string `yaml:"argument-hint"`
@@ -66,8 +132,11 @@ func LoadFromFS(opts LoaderOptions) ([]CommandRegistration, []error) {
 		errs          []error
 	)
 
+	ops := resolveFileOps(opts)
+	walk := resolveWalkDirFunc(opts)
+
 	projectDir := filepath.Join(opts.ProjectRoot, ".claude", "commands")
-	files, loadErrs := loadCommandDir(projectDir)
+	files, loadErrs := loadCommandDir(projectDir, ops, walk)
 	errs = append(errs, loadErrs...)
 	for name, file := range files {
 		merged[name] = file
@@ -90,7 +159,7 @@ func LoadFromFS(opts LoaderOptions) ([]CommandRegistration, []error) {
 				Name:        file.Name,
 				Description: strings.TrimSpace(file.Metadata.Description),
 			},
-			Handler: buildHandler(file),
+			Handler: buildHandler(file, ops),
 		}
 		registrations = append(registrations, reg)
 	}
@@ -98,11 +167,11 @@ func LoadFromFS(opts LoaderOptions) ([]CommandRegistration, []error) {
 	return registrations, errs
 }
 
-func loadCommandDir(root string) (map[string]CommandFile, []error) {
+func loadCommandDir(root string, ops fileOps, walk walkDirFunc) (map[string]CommandFile, []error) {
 	results := map[string]CommandFile{}
 	var errs []error
 
-	info, err := os.Stat(root)
+	info, err := ops.statFile(root)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return results, nil
@@ -113,7 +182,7 @@ func loadCommandDir(root string) (map[string]CommandFile, []error) {
 		return results, []error{fmt.Errorf("commands: path %s is not a directory", root)}
 	}
 
-	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	walkErr := walk(root, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			errs = append(errs, fmt.Errorf("commands: walk %s: %w", path, walkErr))
 			return nil
@@ -125,22 +194,17 @@ func loadCommandDir(root string) (map[string]CommandFile, []error) {
 			return nil
 		}
 
-		name := strings.ToLower(strings.TrimSuffix(d.Name(), filepath.Ext(d.Name())))
-		if !validName(name) {
-			errs = append(errs, fmt.Errorf("commands: invalid command name %q from file %s", name, path))
-			return nil
-		}
-
-		file, parseErr := parseCommandFile(path, name)
+		fallback := strings.ToLower(strings.TrimSuffix(d.Name(), filepath.Ext(d.Name())))
+		file, parseErr := parseCommandFile(path, fallback, ops)
 		if parseErr != nil {
 			errs = append(errs, parseErr)
 			return nil
 		}
-		if _, exists := results[name]; exists {
-			errs = append(errs, fmt.Errorf("commands: duplicate command %q in %s", name, root))
+		if _, exists := results[file.Name]; exists {
+			errs = append(errs, fmt.Errorf("commands: duplicate command %q in %s", file.Name, root))
 			return nil
 		}
-		results[name] = file
+		results[file.Name] = file
 		return nil
 	})
 	if walkErr != nil {
@@ -149,11 +213,19 @@ func loadCommandDir(root string) (map[string]CommandFile, []error) {
 	return results, errs
 }
 
-func parseCommandFile(path, name string) (CommandFile, error) {
-	meta, err := readFrontMatterMetadata(path)
+func parseCommandFile(path, fallback string, ops fileOps) (CommandFile, error) {
+	meta, err := readFrontMatterMetadata(path, ops)
 	if err != nil {
 		return CommandFile{}, fmt.Errorf("commands: parse %s: %w", path, err)
 	}
+	name := strings.ToLower(strings.TrimSpace(meta.Name))
+	if name == "" {
+		name = strings.ToLower(strings.TrimSpace(fallback))
+	}
+	if !validName(name) {
+		return CommandFile{}, fmt.Errorf("commands: invalid command name %q from file %s", name, path)
+	}
+	meta.Name = name
 	return CommandFile{
 		Name:     name,
 		Path:     path,
@@ -161,8 +233,8 @@ func parseCommandFile(path, name string) (CommandFile, error) {
 	}, nil
 }
 
-func readFrontMatterMetadata(path string) (CommandMetadata, error) {
-	file, err := openFile(path)
+func readFrontMatterMetadata(path string, ops fileOps) (CommandMetadata, error) {
+	file, err := ops.openFile(path)
 	if err != nil {
 		return CommandMetadata{}, fmt.Errorf("commands: read %s: %w", path, err)
 	}
@@ -234,6 +306,7 @@ func parseFrontMatter(content string) (CommandMetadata, string, error) {
 type lazyCommandBody struct {
 	path     string
 	metadata CommandMetadata
+	ops      fileOps
 
 	mu         sync.Mutex
 	body       string
@@ -243,7 +316,7 @@ type lazyCommandBody struct {
 }
 
 func (l *lazyCommandBody) load() (string, CommandMetadata, error) {
-	info, err := statFile(l.path)
+	info, err := l.ops.statFile(l.path)
 	if err != nil {
 		return "", CommandMetadata{}, fmt.Errorf("commands: stat %s: %w", l.path, err)
 	}
@@ -255,7 +328,7 @@ func (l *lazyCommandBody) load() (string, CommandMetadata, error) {
 		return l.body, l.loadedMetaOrFallback(), nil
 	}
 
-	data, err := readFile(l.path)
+	data, err := l.ops.readFile(l.path)
 	if err != nil {
 		return "", CommandMetadata{}, fmt.Errorf("commands: read %s: %w", l.path, err)
 	}
@@ -280,10 +353,11 @@ func (l *lazyCommandBody) loadedMetaOrFallback() CommandMetadata {
 	return l.metadata
 }
 
-func buildHandler(file CommandFile) Handler {
+func buildHandler(file CommandFile, ops fileOps) Handler {
 	loader := &lazyCommandBody{
 		path:     file.Path,
 		metadata: file.Metadata,
+		ops:      ops,
 	}
 
 	return HandlerFunc(func(_ context.Context, inv Invocation) (Result, error) {
@@ -348,19 +422,21 @@ func SetCommandFileOpsForTest(
 	open func(string) (*os.File, error),
 	stat func(string) (fs.FileInfo, error),
 ) (restore func()) {
-	prevRead, prevOpen, prevStat := readFile, openFile, statFile
+	fileOpOverridesMu.Lock()
+	prev := fileOpOverrides
 	if read != nil {
-		readFile = read
+		fileOpOverrides.read = read
 	}
 	if open != nil {
-		openFile = open
+		fileOpOverrides.open = open
 	}
 	if stat != nil {
-		statFile = stat
+		fileOpOverrides.stat = stat
 	}
+	fileOpOverridesMu.Unlock()
 	return func() {
-		readFile = prevRead
-		openFile = prevOpen
-		statFile = prevStat
+		fileOpOverridesMu.Lock()
+		fileOpOverrides = prev
+		fileOpOverridesMu.Unlock()
 	}
 }
