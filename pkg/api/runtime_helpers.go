@@ -371,7 +371,7 @@ func (s *historyStore) Get(id string) *message.History {
 	}
 	s.mu.Unlock()
 	if evicted != "" {
-		_ = cleanupToolOutputSessionDir(evicted)
+		cleanupToolOutputSessionDir(evicted) //nolint:errcheck
 		if onEvict != nil {
 			onEvict(evicted)
 		}

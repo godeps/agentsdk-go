@@ -77,7 +77,8 @@ func (e *Executor) Execute(ctx context.Context, call Call) (*CallResult, error) 
 		res, execErr = tool.Execute(ctx, params)
 	}
 	if e.persister != nil && res != nil {
-		_ = e.persister.MaybePersist(call, res)
+		// MaybePersist errors are logged internally; ignore return value
+		e.persister.MaybePersist(call, res) //nolint:errcheck
 	}
 	cr := &CallResult{
 		Call:        call,

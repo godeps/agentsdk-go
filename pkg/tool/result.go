@@ -10,9 +10,9 @@ type OutputRef struct {
 
 // ToolResult captures the outcome of a tool invocation.
 type ToolResult struct {
-	Success bool
-	Output  string
+	Success   bool
+	Output    string
 	OutputRef *OutputRef
-	Data    interface{}
-	Error   error
+	Data      interface{}
+	Error     error
 }

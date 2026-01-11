@@ -62,8 +62,8 @@ func TestSpoolWriterWriteStringBuffers(t *testing.T) {
 
 func TestSpoolWriterTruncatesWhenFactoryNil(t *testing.T) {
 	w := NewSpoolWriter(1, nil)
-	_, _ = w.Write([]byte("a"))
-	_, _ = w.Write([]byte("b"))
+	_, _ = w.Write([]byte("a")) //nolint:errcheck //nolint:errcheck
+	_, _ = w.Write([]byte("b")) //nolint:errcheck //nolint:errcheck
 	if !w.Truncated() {
 		t.Fatalf("expected writer to truncate when factory is nil")
 	}
@@ -73,7 +73,7 @@ func TestSpoolWriterTruncatesWhenFactoryNil(t *testing.T) {
 	if w.String() != "a" {
 		t.Fatalf("expected buffered output to remain, got %q", w.String())
 	}
-	_, _ = w.Write([]byte("c"))
+	_, _ = w.Write([]byte("c")) //nolint:errcheck //nolint:errcheck
 	if w.String() != "a" {
 		t.Fatalf("expected truncated writer to ignore writes, got %q", w.String())
 	}
@@ -86,8 +86,8 @@ func TestSpoolWriterTruncatesAfterFactoryError(t *testing.T) {
 	w := NewSpoolWriter(1, func() (io.WriteCloser, string, error) {
 		return nil, "", errors.New("boom")
 	})
-	_, _ = w.Write([]byte("a"))
-	_, _ = w.Write([]byte("b"))
+	_, _ = w.Write([]byte("a")) //nolint:errcheck //nolint:errcheck
+	_, _ = w.Write([]byte("b")) //nolint:errcheck //nolint:errcheck
 	if !w.Truncated() {
 		t.Fatalf("expected writer to truncate after spill failure")
 	}
@@ -106,8 +106,8 @@ func TestSpoolWriterTruncatesWhenFactoryReturnsInvalidFile(t *testing.T) {
 	w := NewSpoolWriter(1, func() (io.WriteCloser, string, error) {
 		return nil, filepath.Join(t.TempDir(), "spool.txt"), nil
 	})
-	_, _ = w.Write([]byte("a"))
-	_, _ = w.Write([]byte("b"))
+	_, _ = w.Write([]byte("a")) //nolint:errcheck //nolint:errcheck
+	_, _ = w.Write([]byte("b")) //nolint:errcheck //nolint:errcheck
 	if !w.Truncated() {
 		t.Fatalf("expected writer to truncate when factory returns invalid file")
 	}
@@ -127,8 +127,8 @@ func TestSpoolWriterTruncatesWhenFactoryReturnsEmptyPath(t *testing.T) {
 		path = f.Name()
 		return f, "   ", nil
 	})
-	_, _ = w.Write([]byte("a"))
-	_, _ = w.Write([]byte("b"))
+	_, _ = w.Write([]byte("a")) //nolint:errcheck //nolint:errcheck
+	_, _ = w.Write([]byte("b")) //nolint:errcheck //nolint:errcheck
 	if !w.Truncated() {
 		t.Fatalf("expected writer to truncate when factory returns empty path")
 	}
@@ -154,8 +154,8 @@ func TestSpoolWriterTruncatesAfterFileWriteFailure(t *testing.T) {
 	w := NewSpoolWriter(1, func() (io.WriteCloser, string, error) {
 		return &stubWriteCloser{failAt: 1, err: errors.New("boom")}, path, nil
 	})
-	_, _ = w.Write([]byte("a"))
-	_, _ = w.Write([]byte("b"))
+	_, _ = w.Write([]byte("a")) //nolint:errcheck //nolint:errcheck
+	_, _ = w.Write([]byte("b")) //nolint:errcheck //nolint:errcheck
 	if !w.Truncated() {
 		t.Fatalf("expected writer to truncate after file write failure")
 	}
@@ -178,8 +178,8 @@ func TestSpoolWriterTruncatesAfterSecondWriteFailure(t *testing.T) {
 	w := NewSpoolWriter(1, func() (io.WriteCloser, string, error) {
 		return &stubWriteCloser{failAt: 2, err: errors.New("boom")}, path, nil
 	})
-	_, _ = w.Write([]byte("a"))
-	_, _ = w.Write([]byte("b"))
+	_, _ = w.Write([]byte("a")) //nolint:errcheck
+	_, _ = w.Write([]byte("b")) //nolint:errcheck
 	if !w.Truncated() {
 		t.Fatalf("expected writer to truncate after second write failure")
 	}
@@ -206,9 +206,9 @@ func TestSpoolWriterWritesToOpenFile(t *testing.T) {
 		return file, file.Name(), nil
 	})
 
-	_, _ = w.Write([]byte("a"))
-	_, _ = w.Write([]byte("b"))
-	_, _ = w.Write([]byte("c"))
+	_, _ = w.Write([]byte("a")) //nolint:errcheck
+	_, _ = w.Write([]byte("b")) //nolint:errcheck
+	_, _ = w.Write([]byte("c")) //nolint:errcheck
 	path := w.Path()
 	if strings.TrimSpace(path) == "" {
 		t.Fatalf("expected writer to spill to disk")
@@ -244,14 +244,14 @@ func TestSpoolWriterTruncatesAfterFileWriteFailureWhenAlreadySpooling(t *testing
 		return file, file.Name(), nil
 	})
 
-	_, _ = w.Write([]byte("a"))
+	_, _ = w.Write([]byte("a")) //nolint:errcheck
 	if w.Truncated() || w.Path() == "" || file == nil {
 		t.Fatalf("expected initial spill to succeed")
 	}
 	if err := file.Close(); err != nil {
 		t.Fatalf("close temp file: %v", err)
 	}
-	_, _ = w.Write([]byte("b"))
+	_, _ = w.Write([]byte("b")) //nolint:errcheck
 	if !w.Truncated() {
 		t.Fatalf("expected writer to truncate after write to closed file")
 	}

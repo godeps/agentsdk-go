@@ -116,7 +116,7 @@ func TestNonNilContextBranches(t *testing.T) {
 	if got := nonNilContext(ctx); got != ctx {
 		t.Fatalf("expected context passthrough")
 	}
-	if got := nonNilContext(nil); got == nil {
+	if got := nonNilContext(nil); got == nil { //nolint:staticcheck
 		t.Fatalf("expected non-nil context")
 	}
 }
