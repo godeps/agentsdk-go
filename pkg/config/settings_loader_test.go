@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -28,14 +27,11 @@ func writeSettingsFile(t *testing.T, path string, cfg Settings) {
 	require.NoError(t, os.WriteFile(path, data, 0o600))
 }
 
-func loadWithManagedPath(t *testing.T, projectRoot, managedPath string, runtimeOverrides *Settings) *Settings {
+func loadSettings(t *testing.T, projectRoot string, runtimeOverrides *Settings) *Settings {
 	t.Helper()
 	loader := SettingsLoader{ProjectRoot: projectRoot, RuntimeOverrides: runtimeOverrides}
 	settings, err := loader.Load()
 	require.NoError(t, err)
-	if managedPath != "" {
-		require.NoError(t, applySettingsLayer(settings, "managed", managedPath, loader.FS))
-	}
 	return settings
 }
 
@@ -130,27 +126,13 @@ func TestSettingsLoader_MultiLayerMerge(t *testing.T) {
 		},
 		EnabledPlugins: map[string]bool{"runtime@oss": true},
 	}
-	managedCfg := Settings{
-		Model: "managed-model",
-		Env:   map[string]string{"C": "managed"},
-		Permissions: &PermissionsConfig{
-			Allow:       []string{"Bash(managed:*)"},
-			DefaultMode: "acceptEdits",
-		},
-		Sandbox: &SandboxConfig{
-			Enabled:                  boolPtr(true),
-			AllowUnsandboxedCommands: boolPtr(false),
-		},
-		EnabledPlugins: map[string]bool{"alpha@core": true},
-	}
-
 	t.Run("project plus local", func(t *testing.T) {
 		t.Parallel()
 		projectRoot, projectPath, localPath := newIsolatedPaths(t)
 		writeSettingsFile(t, projectPath, projectCfg)
 		writeSettingsFile(t, localPath, localCfg)
 
-		got := loadWithManagedPath(t, projectRoot, "", nil)
+		got := loadSettings(t, projectRoot, nil)
 
 		require.Equal(t, "local-model", got.Model)
 		require.Equal(t, map[string]string{"A": "2", "B": "local", "C": "3"}, got.Env)
@@ -165,7 +147,7 @@ func TestSettingsLoader_MultiLayerMerge(t *testing.T) {
 		projectRoot, projectPath, _ := newIsolatedPaths(t)
 		writeSettingsFile(t, projectPath, projectCfg)
 
-		got := loadWithManagedPath(t, projectRoot, "", runtimeCfg)
+		got := loadSettings(t, projectRoot, runtimeCfg)
 
 		require.Equal(t, "runtime-model", got.Model)
 		require.Equal(t, map[string]string{"A": "2", "B": "p", "C": "runtime"}, got.Env)
@@ -177,30 +159,6 @@ func TestSettingsLoader_MultiLayerMerge(t *testing.T) {
 		}, got.EnabledPlugins)
 	})
 
-	t.Run("full four layers", func(t *testing.T) {
-		t.Parallel()
-		projectRoot, projectPath, localPath := newIsolatedPaths(t)
-		writeSettingsFile(t, projectPath, projectCfg)
-		writeSettingsFile(t, localPath, localCfg)
-
-		managedPath := filepath.Join(projectRoot, "managed.json")
-		writeSettingsFile(t, managedPath, managedCfg)
-
-		got := loadWithManagedPath(t, projectRoot, managedPath, runtimeCfg)
-
-		require.Equal(t, "managed-model", got.Model)
-		require.Equal(t, 20, got.CleanupPeriodDays) // managed did not override, project value survives runtime override
-		require.Equal(t, map[string]string{"A": "2", "B": "local", "C": "managed"}, got.Env)
-		require.Equal(t, []string{"Bash(home:*)", "Bash(proj:*)", "Bash(managed:*)"}, got.Permissions.Allow)
-		require.False(t, *got.Sandbox.AllowUnsandboxedCommands)
-		require.True(t, *got.Sandbox.Enabled)
-		require.Equal(t, map[string]bool{
-			"alpha@core":  true,  // managed override
-			"beta@core":   false, // local override
-			"local@oss":   true,
-			"runtime@oss": true,
-		}, got.EnabledPlugins)
-	})
 }
 
 func TestSettingsLoader_Precedence(t *testing.T) {
@@ -215,7 +173,7 @@ func TestSettingsLoader_Precedence(t *testing.T) {
 			Env: map[string]string{"PATH": "local"},
 		})
 
-		got := loadWithManagedPath(t, projectRoot, "", nil)
+		got := loadSettings(t, projectRoot, nil)
 		require.Equal(t, "project", got.Model) // unchanged
 		require.Equal(t, "local", got.Env["PATH"])
 	})
@@ -225,7 +183,7 @@ func TestSettingsLoader_Precedence(t *testing.T) {
 		projectRoot, projectPath, _ := newIsolatedPaths(t)
 		writeSettingsFile(t, projectPath, Settings{Model: "project"})
 
-		got := loadWithManagedPath(t, projectRoot, "", nil)
+		got := loadSettings(t, projectRoot, nil)
 		require.Equal(t, "project", got.Model)
 	})
 
@@ -235,22 +193,8 @@ func TestSettingsLoader_Precedence(t *testing.T) {
 		writeSettingsFile(t, projectPath, Settings{Model: "project"})
 		writeSettingsFile(t, localPath, Settings{Model: "local"})
 
-		got := loadWithManagedPath(t, projectRoot, "", &Settings{Model: "runtime"})
+		got := loadSettings(t, projectRoot, &Settings{Model: "runtime"})
 		require.Equal(t, "runtime", got.Model)
-	})
-
-	t.Run("enterprise managed highest", func(t *testing.T) {
-		t.Parallel()
-		projectRoot, projectPath, localPath := newIsolatedPaths(t)
-		writeSettingsFile(t, projectPath, Settings{Model: "project"})
-		writeSettingsFile(t, localPath, Settings{Model: "local"})
-		runtimeCfg := &Settings{Model: "runtime"}
-
-		managedPath := filepath.Join(projectRoot, "managed.json")
-		writeSettingsFile(t, managedPath, Settings{Model: "managed"})
-
-		got := loadWithManagedPath(t, projectRoot, managedPath, runtimeCfg)
-		require.Equal(t, "managed", got.Model)
 	})
 }
 
@@ -306,7 +250,7 @@ func TestSettingsLoader_FieldMerging(t *testing.T) {
 	writeSettingsFile(t, projectPath, project)
 	writeSettingsFile(t, localPath, local)
 
-	got := loadWithManagedPath(t, projectRoot, "", nil)
+	got := loadSettings(t, projectRoot, nil)
 
 	require.Equal(t, []string{"Write(logs)", "Exec(*)", "Debug(*)"}, got.Permissions.Allow)
 	require.Equal(t, []string{"Overwrite(root)", "Shutdown(*)"}, got.Permissions.Deny)
@@ -350,7 +294,7 @@ func TestSettingsLoader_ToolOutputConfigMerge(t *testing.T) {
 		},
 	})
 
-	got := loadWithManagedPath(t, projectRoot, "", nil)
+	got := loadSettings(t, projectRoot, nil)
 	require.NotNil(t, got.ToolOutput)
 	require.Equal(t, 100, got.ToolOutput.DefaultThresholdBytes)
 	require.Equal(t, map[string]int{
@@ -365,7 +309,7 @@ func TestSettingsLoader_MissingFiles(t *testing.T) {
 		t.Parallel()
 		projectRoot, _, _ := newIsolatedPaths(t)
 
-		got := loadWithManagedPath(t, projectRoot, "", nil)
+		got := loadSettings(t, projectRoot, nil)
 		require.Equal(t, 30, got.CleanupPeriodDays)
 		require.True(t, *got.IncludeCoAuthoredBy)
 		require.Equal(t, "askBeforeRunningTools", got.Permissions.DefaultMode)
@@ -378,7 +322,7 @@ func TestSettingsLoader_MissingFiles(t *testing.T) {
 		projectRoot, projectPath, _ := newIsolatedPaths(t)
 		writeSettingsFile(t, projectPath, Settings{Model: "project", Env: map[string]string{"K": "1"}})
 
-		got := loadWithManagedPath(t, projectRoot, "", nil)
+		got := loadSettings(t, projectRoot, nil)
 		require.Equal(t, "project", got.Model)
 		require.Equal(t, map[string]string{"K": "1"}, got.Env)
 		require.Equal(t, "askBeforeRunningTools", got.Permissions.DefaultMode)
@@ -405,7 +349,7 @@ func TestSettingsLoader_InvalidJSON(t *testing.T) {
 			Permissions: &PermissionsConfig{DefaultMode: " "}, // overrides default with blank
 		})
 
-		settings := loadWithManagedPath(t, projectRoot, "", nil)
+		settings := loadSettings(t, projectRoot, nil)
 		err := settings.Validate()
 		require.Error(t, err)
 		require.ErrorContains(t, err, "model is required")
@@ -425,28 +369,6 @@ func TestSettingsLoader_InvalidJSON(t *testing.T) {
 	})
 }
 
-func TestSettingsLoader_PlatformSpecific(t *testing.T) {
-	t.Parallel()
-	expected := map[string]string{
-		"darwin":  "/Library/Application Support/ClaudeCode/managed-settings.json",
-		"windows": `C:\\ProgramData\\ClaudeCode\\managed-settings.json`,
-		"linux":   "/etc/claude-code/managed-settings.json",
-	}
-
-	actual := getManagedSettingsPath()
-	switch runtime.GOOS {
-	case "darwin":
-		require.Equal(t, expected["darwin"], actual)
-	case "windows":
-		require.Equal(t, expected["windows"], actual)
-	default:
-		require.Equal(t, expected["linux"], actual)
-	}
-
-	require.Equal(t, expected["darwin"], managedPathForOS("darwin"))
-	require.Equal(t, expected["linux"], managedPathForOS("linux"))
-}
-
 func TestSettingsLoaderMissingProjectRoot(t *testing.T) {
 	loader := SettingsLoader{}
 	_, err := loader.Load()
@@ -460,13 +382,3 @@ func TestLoadJSONFileMissingReturnsNil(t *testing.T) {
 	require.Nil(t, settings)
 }
 
-func managedPathForOS(goos string) string {
-	switch goos {
-	case "darwin":
-		return "/Library/Application Support/ClaudeCode/managed-settings.json"
-	case "windows":
-		return `C:\\ProgramData\\ClaudeCode\\managed-settings.json`
-	default:
-		return "/etc/claude-code/managed-settings.json"
-	}
-}

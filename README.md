@@ -383,7 +383,6 @@ The SDK uses the `.claude/` directory for configuration, compatible with Claude 
 ```
 
 Configuration precedence (high → low):
-- Managed policies (`/etc/claude-code/managed-settings.json` or platform-specific equivalents)
 - Runtime overrides (CLI/API-provided)
 - `.claude/settings.local.json`
 - `.claude/settings.json`

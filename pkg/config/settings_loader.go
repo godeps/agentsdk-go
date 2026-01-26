@@ -8,13 +8,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
 // SettingsLoader composes settings using the simplified precedence model.
 // Higher-priority layers override lower ones while preserving unspecified fields.
-// Order (low -> high): project < local < runtime overrides < managed policies.
+// Order (low -> high): defaults < project < local < runtime overrides.
 type SettingsLoader struct {
 	ProjectRoot      string
 	RuntimeOverrides *Settings
@@ -59,24 +58,7 @@ func (l *SettingsLoader) Load() (*Settings, error) {
 		log.Printf("settings: no runtime overrides provided")
 	}
 
-	managedPath := getManagedSettingsPath()
-	if err := applySettingsLayer(&merged, "managed", managedPath, l.FS); err != nil {
-		return nil, err
-	}
-
 	return &merged, nil
-}
-
-// getManagedSettingsPath returns the enterprise-managed settings path for the host OS.
-func getManagedSettingsPath() string {
-	switch runtime.GOOS {
-	case "darwin":
-		return "/Library/Application Support/ClaudeCode/managed-settings.json"
-	case "windows":
-		return `C:\\ProgramData\\ClaudeCode\\managed-settings.json`
-	default:
-		return "/etc/claude-code/managed-settings.json"
-	}
 }
 
 // getProjectSettingsPath returns the tracked project settings path.

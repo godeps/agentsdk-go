@@ -362,8 +362,7 @@ SDK 使用 `.claude/` 目录进行配置，与 Claude Code 兼容：
 
 ### 配置优先级
 
-- 托管策略（最高优先级，例如 `/etc/claude-code/managed-settings.json` 或平台自定义位置）
-- 运行时覆盖（CLI / API 提供的配置）
+- 运行时覆盖（最高优先级，CLI / API 提供的配置）
 - `.claude/settings.local.json`
 - `.claude/settings.json`
 - SDK 内置默认值

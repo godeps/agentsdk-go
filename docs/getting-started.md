@@ -299,11 +299,10 @@ Configuration lives under `.claude/`:
 
 ### Precedence (high → low)
 
-1. Enterprise managed policies (`/etc/claude-code/managed-settings.json`, etc.)
-2. Runtime overrides (CLI flags / API `RuntimeOverrides`)
-3. `.claude/settings.local.json`
-4. `.claude/settings.json`
-5. SDK defaults
+1. Runtime overrides (CLI flags / API `RuntimeOverrides`)
+2. `.claude/settings.local.json`
+3. `.claude/settings.json`
+4. SDK defaults
 
 `~/.claude/` is no longer read—keep config in the project.
 
