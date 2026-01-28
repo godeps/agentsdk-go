@@ -552,7 +552,11 @@ The SDK ships with the following built-in tools:
 - `web_fetch` - Fetch web content with prompt-based extraction
 - `web_search` - Web search with domain filtering
 - `bash_output` - Read output from background bash processes
+- `bash_status` - Poll status of background bash processes
+- `kill_task` - Terminate a running background bash process
 - `todo_write` - Task tracking and management
+- `task_update` - Update task status and dependencies
+- `ask_user_question` - Ask the user questions during execution
 - `skill` - Execute skills from `.claude/skills/`
 - `slash_command` - Execute slash commands from `.claude/commands/`
 - `task` - Spawn subagents for complex tasks (CLI/CI modes only)
