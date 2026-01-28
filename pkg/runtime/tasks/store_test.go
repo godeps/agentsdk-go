@@ -3,6 +3,7 @@ package tasks
 import (
 	"errors"
 	"fmt"
+	"github.com/stretchr/testify/require"
 	"slices"
 	"sync"
 	"testing"
@@ -13,13 +14,9 @@ func TestTaskStoreCRUDAndClone(t *testing.T) {
 	var store TaskStore
 
 	first, err := store.Create("task-a", "desc-a", "form-a")
-	if err != nil {
-		t.Fatalf("Create task-a: %v", err)
-	}
+	require.NoError(t, err)
 	second, err := store.Create("task-b", "desc-b", "form-b")
-	if err != nil {
-		t.Fatalf("Create task-b: %v", err)
-	}
+	require.NoError(t, err)
 	if first.ID == "" || second.ID == "" || first.ID == second.ID {
 		t.Fatalf("expected unique non-empty IDs: first=%q second=%q", first.ID, second.ID)
 	}
@@ -31,9 +28,7 @@ func TestTaskStoreCRUDAndClone(t *testing.T) {
 	}
 
 	got, err := store.Get(first.ID)
-	if err != nil {
-		t.Fatalf("Get: %v", err)
-	}
+	require.NoError(t, err)
 	if got.ID != first.ID || got.Subject != "task-a" || got.ActiveForm != "form-a" {
 		t.Fatalf("unexpected Get: %+v", got)
 	}
@@ -42,9 +37,7 @@ func TestTaskStoreCRUDAndClone(t *testing.T) {
 	got.Subject = "mutated"
 	got.BlockedBy = []string{"leak"}
 	reloaded, err := store.Get(first.ID)
-	if err != nil {
-		t.Fatalf("Get reload: %v", err)
-	}
+	require.NoError(t, err)
 	if reloaded.Subject != "task-a" || len(reloaded.BlockedBy) != 0 {
 		t.Fatalf("store leaked internal pointer: %+v", reloaded)
 	}
@@ -67,9 +60,7 @@ func TestTaskStoreCRUDAndClone(t *testing.T) {
 		Owner:   &owner,
 		Status:  &status,
 	})
-	if err != nil {
-		t.Fatalf("Update: %v", err)
-	}
+	require.NoError(t, err)
 	if updated.Subject != "task-a-updated" || updated.Owner != "alice" || updated.Status != TaskInProgress {
 		t.Fatalf("unexpected Update: %+v", updated)
 	}
@@ -77,9 +68,7 @@ func TestTaskStoreCRUDAndClone(t *testing.T) {
 		t.Fatalf("expected UpdatedAt to not go backwards: before=%v after=%v", first.UpdatedAt, updated.UpdatedAt)
 	}
 
-	if err := store.Delete(second.ID); err != nil {
-		t.Fatalf("Delete: %v", err)
-	}
+	require.NoError(t, store.Delete(second.ID))
 	if _, err := store.Get(second.ID); !errors.Is(err, ErrTaskNotFound) {
 		t.Fatalf("expected not found after delete, got %v", err)
 	}
@@ -95,12 +84,9 @@ func TestNewTaskStore(t *testing.T) {
 		t.Fatalf("expected non-nil store")
 	}
 	task, err := store.Create("A", "", "")
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if _, err := store.Get(task.ID); err != nil {
-		t.Fatalf("Get: %v", err)
-	}
+	require.NoError(t, err)
+	_, err = store.Get(task.ID)
+	require.NoError(t, err)
 }
 
 func TestTaskStoreValidationAndErrors(t *testing.T) {
@@ -120,9 +106,7 @@ func TestTaskStoreValidationAndErrors(t *testing.T) {
 	}
 
 	task, err := store.Create("ok", "", "")
-	if err != nil {
-		t.Fatalf("Create ok: %v", err)
-	}
+	require.NoError(t, err)
 	if _, err := store.Update("missing", TaskUpdate{}); !errors.Is(err, ErrTaskNotFound) {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -140,28 +124,21 @@ func TestTaskStoreDependenciesAndUnblockOnCompletion(t *testing.T) {
 	var store TaskStore
 
 	a, err := store.Create("A", "", "")
-	if err != nil {
-		t.Fatalf("Create A: %v", err)
-	}
+	require.NoError(t, err)
 	b, err := store.Create("B", "", "")
-	if err != nil {
-		t.Fatalf("Create B: %v", err)
-	}
+	require.NoError(t, err)
 	c, err := store.Create("C", "", "")
-	if err != nil {
-		t.Fatalf("Create C: %v", err)
-	}
+	require.NoError(t, err)
 
-	if err := store.AddDependency(b.ID, a.ID); err != nil {
-		t.Fatalf("AddDependency B<-A: %v", err)
-	}
-	if err := store.AddDependency(c.ID, b.ID); err != nil {
-		t.Fatalf("AddDependency C<-B: %v", err)
-	}
+	require.NoError(t, store.AddDependency(b.ID, a.ID))
+	require.NoError(t, store.AddDependency(c.ID, b.ID))
 
-	gotA, _ := store.Get(a.ID)
-	gotB, _ := store.Get(b.ID)
-	gotC, _ := store.Get(c.ID)
+	gotA, err := store.Get(a.ID)
+	require.NoError(t, err)
+	gotB, err := store.Get(b.ID)
+	require.NoError(t, err)
+	gotC, err := store.Get(c.ID)
+	require.NoError(t, err)
 	if gotB.Status != TaskBlocked || gotC.Status != TaskBlocked {
 		t.Fatalf("expected B and C to be blocked: B=%s C=%s", gotB.Status, gotC.Status)
 	}
@@ -173,20 +150,20 @@ func TestTaskStoreDependenciesAndUnblockOnCompletion(t *testing.T) {
 	}
 
 	// Duplicate add should be idempotent.
-	if err := store.AddDependency(b.ID, a.ID); err != nil {
-		t.Fatalf("duplicate AddDependency: %v", err)
-	}
-	gotB, _ = store.Get(b.ID)
+	require.NoError(t, store.AddDependency(b.ID, a.ID))
+	gotB, err = store.Get(b.ID)
+	require.NoError(t, err)
 	if len(gotB.BlockedBy) != 1 {
 		t.Fatalf("expected no duplicate blockers, got %+v", gotB.BlockedBy)
 	}
 
 	statusCompleted := TaskCompleted
-	if _, err := store.Update(a.ID, TaskUpdate{Status: &statusCompleted}); err != nil {
-		t.Fatalf("complete A: %v", err)
-	}
-	gotB, _ = store.Get(b.ID)
-	gotC, _ = store.Get(c.ID)
+	_, err = store.Update(a.ID, TaskUpdate{Status: &statusCompleted})
+	require.NoError(t, err)
+	gotB, err = store.Get(b.ID)
+	require.NoError(t, err)
+	gotC, err = store.Get(c.ID)
+	require.NoError(t, err)
 	if gotB.Status != TaskPending {
 		t.Fatalf("expected B unblocked after A completed, got %s", gotB.Status)
 	}
@@ -194,10 +171,10 @@ func TestTaskStoreDependenciesAndUnblockOnCompletion(t *testing.T) {
 		t.Fatalf("expected C to remain blocked by B, got %s", gotC.Status)
 	}
 
-	if _, err := store.Update(b.ID, TaskUpdate{Status: &statusCompleted}); err != nil {
-		t.Fatalf("complete B: %v", err)
-	}
-	gotC, _ = store.Get(c.ID)
+	_, err = store.Update(b.ID, TaskUpdate{Status: &statusCompleted})
+	require.NoError(t, err)
+	gotC, err = store.Get(c.ID)
+	require.NoError(t, err)
 	if gotC.Status != TaskPending {
 		t.Fatalf("expected C unblocked after B completed, got %s", gotC.Status)
 	}
@@ -215,16 +192,15 @@ func TestTaskStoreDependenciesAndUnblockOnCompletion(t *testing.T) {
 func TestTaskStoreCycleDetection(t *testing.T) {
 	var store TaskStore
 
-	a, _ := store.Create("A", "", "")
-	b, _ := store.Create("B", "", "")
-	c, _ := store.Create("C", "", "")
+	a, err := store.Create("A", "", "")
+	require.NoError(t, err)
+	b, err := store.Create("B", "", "")
+	require.NoError(t, err)
+	c, err := store.Create("C", "", "")
+	require.NoError(t, err)
 
-	if err := store.AddDependency(b.ID, a.ID); err != nil {
-		t.Fatalf("AddDependency B<-A: %v", err)
-	}
-	if err := store.AddDependency(c.ID, b.ID); err != nil {
-		t.Fatalf("AddDependency C<-B: %v", err)
-	}
+	require.NoError(t, store.AddDependency(b.ID, a.ID))
+	require.NoError(t, store.AddDependency(c.ID, b.ID))
 
 	if err := store.AddDependency(a.ID, c.ID); !errors.Is(err, ErrDependencyCycle) {
 		t.Fatalf("expected cycle error, got %v", err)
@@ -237,41 +213,37 @@ func TestTaskStoreCycleDetection(t *testing.T) {
 func TestTaskStoreRemoveDependencyUnblocks(t *testing.T) {
 	var store TaskStore
 
-	a, _ := store.Create("A", "", "")
-	b, _ := store.Create("B", "", "")
-	c, _ := store.Create("C", "", "")
+	a, err := store.Create("A", "", "")
+	require.NoError(t, err)
+	b, err := store.Create("B", "", "")
+	require.NoError(t, err)
+	c, err := store.Create("C", "", "")
+	require.NoError(t, err)
 
-	if err := store.AddDependency(c.ID, a.ID); err != nil {
-		t.Fatalf("AddDependency C<-A: %v", err)
-	}
-	if err := store.AddDependency(c.ID, b.ID); err != nil {
-		t.Fatalf("AddDependency C<-B: %v", err)
-	}
-	gotC, _ := store.Get(c.ID)
+	require.NoError(t, store.AddDependency(c.ID, a.ID))
+	require.NoError(t, store.AddDependency(c.ID, b.ID))
+	gotC, err := store.Get(c.ID)
+	require.NoError(t, err)
 	if gotC.Status != TaskBlocked {
 		t.Fatalf("expected C blocked, got %s", gotC.Status)
 	}
 
-	if err := store.RemoveDependency(c.ID, a.ID); err != nil {
-		t.Fatalf("RemoveDependency C<-A: %v", err)
-	}
-	gotC, _ = store.Get(c.ID)
+	require.NoError(t, store.RemoveDependency(c.ID, a.ID))
+	gotC, err = store.Get(c.ID)
+	require.NoError(t, err)
 	if gotC.Status != TaskBlocked || len(gotC.BlockedBy) != 1 || gotC.BlockedBy[0] != b.ID {
 		t.Fatalf("expected C still blocked by B: %+v", gotC)
 	}
 
-	if err := store.RemoveDependency(c.ID, b.ID); err != nil {
-		t.Fatalf("RemoveDependency C<-B: %v", err)
-	}
-	gotC, _ = store.Get(c.ID)
+	require.NoError(t, store.RemoveDependency(c.ID, b.ID))
+	gotC, err = store.Get(c.ID)
+	require.NoError(t, err)
 	if gotC.Status != TaskPending || len(gotC.BlockedBy) != 0 {
 		t.Fatalf("expected C unblocked after removing blockers: %+v", gotC)
 	}
 
 	// idempotent removal
-	if err := store.RemoveDependency(c.ID, b.ID); err != nil {
-		t.Fatalf("RemoveDependency idempotent: %v", err)
-	}
+	require.NoError(t, store.RemoveDependency(c.ID, b.ID))
 }
 
 func TestTaskStoreConcurrentUsage(t *testing.T) {
@@ -340,11 +312,11 @@ func TestTaskStoreConcurrentUsage(t *testing.T) {
 func TestTaskStoreBlockedStatusGuards(t *testing.T) {
 	var store TaskStore
 
-	blocker, _ := store.Create("blocker", "", "")
-	task, _ := store.Create("task", "", "")
-	if err := store.AddDependency(task.ID, blocker.ID); err != nil {
-		t.Fatalf("AddDependency: %v", err)
-	}
+	blocker, err := store.Create("blocker", "", "")
+	require.NoError(t, err)
+	task, err := store.Create("task", "", "")
+	require.NoError(t, err)
+	require.NoError(t, store.AddDependency(task.ID, blocker.ID))
 	inProgress := TaskInProgress
 	if _, err := store.Update(task.ID, TaskUpdate{Status: &inProgress}); !errors.Is(err, ErrTaskBlocked) {
 		t.Fatalf("expected blocked error when starting blocked task, got %v", err)
@@ -354,19 +326,17 @@ func TestTaskStoreBlockedStatusGuards(t *testing.T) {
 		t.Fatalf("expected blocked error when completing blocked task, got %v", err)
 	}
 
-	if _, err := store.Update(blocker.ID, TaskUpdate{Status: &completed}); err != nil {
-		t.Fatalf("complete blocker: %v", err)
-	}
-	if _, err := store.Update(task.ID, TaskUpdate{Status: &inProgress}); err != nil {
-		t.Fatalf("start task after unblock: %v", err)
-	}
+	_, err = store.Update(blocker.ID, TaskUpdate{Status: &completed})
+	require.NoError(t, err)
+	_, err = store.Update(task.ID, TaskUpdate{Status: &inProgress})
+	require.NoError(t, err)
 
 	// Reopen blocker should re-block downstream.
 	pending := TaskPending
-	if _, err := store.Update(blocker.ID, TaskUpdate{Status: &pending}); err != nil {
-		t.Fatalf("reopen blocker: %v", err)
-	}
-	got, _ := store.Get(task.ID)
+	_, err = store.Update(blocker.ID, TaskUpdate{Status: &pending})
+	require.NoError(t, err)
+	got, err := store.Get(task.ID)
+	require.NoError(t, err)
 	if got.Status != TaskBlocked {
 		t.Fatalf("expected task re-blocked after blocker reopened, got %s", got.Status)
 	}
@@ -375,22 +345,21 @@ func TestTaskStoreBlockedStatusGuards(t *testing.T) {
 func TestDeleteCleansUpDependencies(t *testing.T) {
 	var store TaskStore
 
-	a, _ := store.Create("A", "", "")
-	b, _ := store.Create("B", "", "")
-	c, _ := store.Create("C", "", "")
-	if err := store.AddDependency(c.ID, a.ID); err != nil {
-		t.Fatalf("AddDependency C<-A: %v", err)
-	}
-	if err := store.AddDependency(c.ID, b.ID); err != nil {
-		t.Fatalf("AddDependency C<-B: %v", err)
-	}
+	a, err := store.Create("A", "", "")
+	require.NoError(t, err)
+	b, err := store.Create("B", "", "")
+	require.NoError(t, err)
+	c, err := store.Create("C", "", "")
+	require.NoError(t, err)
+	require.NoError(t, store.AddDependency(c.ID, a.ID))
+	require.NoError(t, store.AddDependency(c.ID, b.ID))
 
-	if err := store.Delete(a.ID); err != nil {
-		t.Fatalf("Delete A: %v", err)
-	}
+	require.NoError(t, store.Delete(a.ID))
 
-	gotB, _ := store.Get(b.ID)
-	gotC, _ := store.Get(c.ID)
+	gotB, err := store.Get(b.ID)
+	require.NoError(t, err)
+	gotC, err := store.Get(c.ID)
+	require.NoError(t, err)
 	if slices.Contains(gotB.Blocks, c.ID) != true {
 		t.Fatalf("expected B to still block C")
 	}
@@ -401,10 +370,9 @@ func TestDeleteCleansUpDependencies(t *testing.T) {
 		t.Fatalf("expected C still blocked by B: %+v", gotC)
 	}
 
-	if err := store.Delete(b.ID); err != nil {
-		t.Fatalf("Delete B: %v", err)
-	}
-	gotC, _ = store.Get(c.ID)
+	require.NoError(t, store.Delete(b.ID))
+	gotC, err = store.Get(c.ID)
+	require.NoError(t, err)
 	if gotC.Status != TaskPending {
 		t.Fatalf("expected C unblocked after deleting last blocker: %+v", gotC)
 	}
@@ -413,23 +381,22 @@ func TestDeleteCleansUpDependencies(t *testing.T) {
 func TestDeleteRemovesFromBlockers(t *testing.T) {
 	var store TaskStore
 
-	blockerA, _ := store.Create("A", "", "")
-	blockerB, _ := store.Create("B", "", "")
-	task, _ := store.Create("C", "", "")
+	blockerA, err := store.Create("A", "", "")
+	require.NoError(t, err)
+	blockerB, err := store.Create("B", "", "")
+	require.NoError(t, err)
+	task, err := store.Create("C", "", "")
+	require.NoError(t, err)
 
-	if err := store.AddDependency(task.ID, blockerA.ID); err != nil {
-		t.Fatalf("AddDependency C<-A: %v", err)
-	}
-	if err := store.AddDependency(task.ID, blockerB.ID); err != nil {
-		t.Fatalf("AddDependency C<-B: %v", err)
-	}
+	require.NoError(t, store.AddDependency(task.ID, blockerA.ID))
+	require.NoError(t, store.AddDependency(task.ID, blockerB.ID))
 
-	if err := store.Delete(task.ID); err != nil {
-		t.Fatalf("Delete C: %v", err)
-	}
+	require.NoError(t, store.Delete(task.ID))
 
-	gotA, _ := store.Get(blockerA.ID)
-	gotB, _ := store.Get(blockerB.ID)
+	gotA, err := store.Get(blockerA.ID)
+	require.NoError(t, err)
+	gotB, err := store.Get(blockerB.ID)
+	require.NoError(t, err)
 	if slices.Contains(gotA.Blocks, task.ID) || slices.Contains(gotB.Blocks, task.ID) {
 		t.Fatalf("expected blockers to no longer reference deleted task: A=%+v B=%+v", gotA, gotB)
 	}
@@ -454,7 +421,8 @@ func TestGetBlockedBlockingTasksNilCases(t *testing.T) {
 func TestDependencyErrors(t *testing.T) {
 	var store TaskStore
 
-	a, _ := store.Create("A", "", "")
+	a, err := store.Create("A", "", "")
+	require.NoError(t, err)
 	if err := store.AddDependency("missing", a.ID); !errors.Is(err, ErrTaskNotFound) {
 		t.Fatalf("expected not found, got %v", err)
 	}
@@ -506,14 +474,11 @@ func TestTaskStoreHandlesDanglingReferences(t *testing.T) {
 
 	// Missing blocker IDs should not crash and should not block status transitions.
 	inProgress := TaskInProgress
-	if _, err := store.Update("t1", TaskUpdate{Status: &inProgress}); err != nil {
-		t.Fatalf("Update with dangling blockers: %v", err)
-	}
+	_, err := store.Update("t1", TaskUpdate{Status: &inProgress})
+	require.NoError(t, err)
 
 	// Deleting a task with dangling references should not crash.
-	if err := store.Delete("t1"); err != nil {
-		t.Fatalf("Delete with dangling dependencies: %v", err)
-	}
+	require.NoError(t, store.Delete("t1"))
 
 	// Coverage for early-return paths.
 	store.onTaskCompleted("missing")
