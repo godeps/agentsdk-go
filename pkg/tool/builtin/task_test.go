@@ -215,3 +215,94 @@ func TestParseTaskParamsModelAliases(t *testing.T) {
 		t.Fatalf("expected optional fields empty, got model=%q resume=%q", req.Model, req.Resume)
 	}
 }
+
+// TestTaskToolsShareSameStore verifies that TaskCreate, TaskList, TaskGet, and TaskUpdate
+// all operate on the same TaskStore instance.
+func TestTaskToolsShareSameStore(t *testing.T) {
+	store := NewTaskStore()
+
+	createTool := NewTaskCreateTool(store)
+	listTool := NewTaskListTool(store)
+	getTool := NewTaskGetTool(store)
+	updateTool := NewTaskUpdateTool(store)
+
+	ctx := context.Background()
+
+	// Create a task using TaskCreate
+	createRes, err := createTool.Execute(ctx, map[string]interface{}{
+		"subject":     "Test Task",
+		"description": "Integration test task",
+		"activeForm":  "testing",
+	})
+	if err != nil {
+		t.Fatalf("TaskCreate failed: %v", err)
+	}
+	taskID := createRes.Data.(map[string]interface{})["taskId"].(string)
+
+	// Verify TaskList can see the created task
+	listRes, err := listTool.Execute(ctx, map[string]interface{}{})
+	if err != nil {
+		t.Fatalf("TaskList failed: %v", err)
+	}
+	listData := listRes.Data.(map[string]interface{})
+	if listData["total"].(int) != 1 {
+		t.Fatalf("expected 1 task in list, got %v", listData["total"])
+	}
+
+	// Verify TaskGet can retrieve the created task
+	getRes, err := getTool.Execute(ctx, map[string]interface{}{
+		"taskId": taskID,
+	})
+	if err != nil {
+		t.Fatalf("TaskGet failed: %v", err)
+	}
+	getTask := getRes.Data.(map[string]interface{})["task"].(Task)
+	if getTask.Title != "Test Task" {
+		t.Fatalf("expected title 'Test Task', got %q", getTask.Title)
+	}
+	if getTask.Status != TaskStatusPending {
+		t.Fatalf("expected status pending, got %q", getTask.Status)
+	}
+
+	// Update the task using TaskUpdate
+	_, err = updateTool.Execute(ctx, map[string]interface{}{
+		"taskId": taskID,
+		"status": "in_progress",
+	})
+	if err != nil {
+		t.Fatalf("TaskUpdate failed: %v", err)
+	}
+
+	// Verify TaskGet sees the updated status
+	getRes2, err := getTool.Execute(ctx, map[string]interface{}{
+		"taskId": taskID,
+	})
+	if err != nil {
+		t.Fatalf("TaskGet after update failed: %v", err)
+	}
+	getTask2 := getRes2.Data.(map[string]interface{})["task"].(Task)
+	if getTask2.Status != TaskStatusInProgress {
+		t.Fatalf("expected status in_progress after update, got %q", getTask2.Status)
+	}
+
+	// Complete the task
+	_, err = updateTool.Execute(ctx, map[string]interface{}{
+		"taskId": taskID,
+		"status": "completed",
+	})
+	if err != nil {
+		t.Fatalf("TaskUpdate to completed failed: %v", err)
+	}
+
+	// Verify final state
+	getRes3, err := getTool.Execute(ctx, map[string]interface{}{
+		"taskId": taskID,
+	})
+	if err != nil {
+		t.Fatalf("TaskGet final failed: %v", err)
+	}
+	getTask3 := getRes3.Data.(map[string]interface{})["task"].(Task)
+	if getTask3.Status != TaskStatusCompleted {
+		t.Fatalf("expected status completed, got %q", getTask3.Status)
+	}
+}

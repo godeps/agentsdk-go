@@ -6,12 +6,10 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/cexll/agentsdk-go/pkg/tasks"
 )
 
 func TestTaskCreateToolMetadataAndSchema(t *testing.T) {
-	tool := NewTaskCreateTool(tasks.NewTaskStore())
+	tool := NewTaskCreateTool(NewTaskStore())
 	if tool.Name() != "TaskCreate" {
 		t.Fatalf("unexpected name %q", tool.Name())
 	}
@@ -34,7 +32,7 @@ func TestTaskCreateToolMetadataAndSchema(t *testing.T) {
 }
 
 func TestTaskCreateToolExecuteSuccessStoresTask(t *testing.T) {
-	store := tasks.NewTaskStore()
+	store := NewTaskStore()
 	tool := NewTaskCreateTool(store)
 
 	res, err := tool.Execute(context.Background(), map[string]interface{}{
@@ -63,12 +61,12 @@ func TestTaskCreateToolExecuteSuccessStoresTask(t *testing.T) {
 	if decoded["taskId"] != taskID {
 		t.Fatalf("output taskId mismatch: %q vs %q", decoded["taskId"], taskID)
 	}
-	task, ok := store.GetTask(taskID)
+	task, ok := store.Get(taskID)
 	if !ok {
 		t.Fatalf("task not stored for id %q", taskID)
 	}
-	if task.Subject != "Fix flaky tests" {
-		t.Fatalf("unexpected subject %q", task.Subject)
+	if task.Title != "Fix flaky tests" {
+		t.Fatalf("unexpected title %q", task.Title)
 	}
 	if task.Description != "make CI stable" {
 		t.Fatalf("unexpected description %q", task.Description)
@@ -76,10 +74,13 @@ func TestTaskCreateToolExecuteSuccessStoresTask(t *testing.T) {
 	if task.ActiveForm != "default" {
 		t.Fatalf("unexpected activeForm %q", task.ActiveForm)
 	}
+	if task.Status != TaskStatusPending {
+		t.Fatalf("unexpected status %q", task.Status)
+	}
 }
 
 func TestTaskCreateToolGenerateUniqueIDs(t *testing.T) {
-	store := tasks.NewTaskStore()
+	store := NewTaskStore()
 	tool := NewTaskCreateTool(store)
 	ctx := context.Background()
 
@@ -102,13 +103,13 @@ func TestTaskCreateToolGenerateUniqueIDs(t *testing.T) {
 	if id1 == id2 {
 		t.Fatalf("expected unique task IDs, got %q", id1)
 	}
-	if store.Len() != 2 {
-		t.Fatalf("expected store size 2, got %d", store.Len())
+	if len(store.List()) != 2 {
+		t.Fatalf("expected store size 2, got %d", len(store.List()))
 	}
 }
 
 func TestTaskCreateToolValidationErrors(t *testing.T) {
-	store := tasks.NewTaskStore()
+	store := NewTaskStore()
 	tool := NewTaskCreateTool(store)
 	ctx := context.Background()
 
@@ -136,14 +137,14 @@ func TestTaskCreateToolValidationErrors(t *testing.T) {
 }
 
 func TestTaskCreateToolNilContextHandling(t *testing.T) {
-	tool := NewTaskCreateTool(tasks.NewTaskStore())
+	tool := NewTaskCreateTool(NewTaskStore())
 	if _, err := tool.Execute(nil, map[string]interface{}{"subject": "x", "activeForm": "f"}); err == nil || !strings.Contains(err.Error(), "context is nil") {
 		t.Fatalf("expected context is nil error, got %v", err)
 	}
 }
 
 func TestTaskCreateToolCancelledContextReturnsError(t *testing.T) {
-	store := tasks.NewTaskStore()
+	store := NewTaskStore()
 	tool := NewTaskCreateTool(store)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -151,8 +152,8 @@ func TestTaskCreateToolCancelledContextReturnsError(t *testing.T) {
 	if _, err := tool.Execute(ctx, map[string]interface{}{"subject": "x", "activeForm": "f"}); err == nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context canceled error, got %v", err)
 	}
-	if store.Len() != 0 {
-		t.Fatalf("expected store empty after cancelled context, got %d", store.Len())
+	if len(store.List()) != 0 {
+		t.Fatalf("expected store empty after cancelled context, got %d", len(store.List()))
 	}
 }
 

@@ -24,17 +24,20 @@ var taskStatusSet = map[string]struct{}{
 
 // Task represents a unit of work tracked by the task system.
 type Task struct {
-	ID        string   `json:"id"`
-	Title     string   `json:"title,omitempty"`
-	Status    string   `json:"status"`
-	Owner     string   `json:"owner,omitempty"`
-	BlockedBy []string `json:"blockedBy,omitempty"`
+	ID          string   `json:"id"`
+	Title       string   `json:"title,omitempty"`
+	Description string   `json:"description,omitempty"`
+	ActiveForm  string   `json:"activeForm,omitempty"`
+	Status      string   `json:"status"`
+	Owner       string   `json:"owner,omitempty"`
+	BlockedBy   []string `json:"blockedBy,omitempty"`
 }
 
 // TaskStore keeps task state in memory with a small, concurrency-safe API.
 type TaskStore struct {
-	mu    sync.RWMutex
-	tasks map[string]Task
+	mu     sync.RWMutex
+	tasks  map[string]Task
+	nextID uint64
 }
 
 func NewTaskStore() *TaskStore {
@@ -107,6 +110,40 @@ func (s *TaskStore) List() []Task {
 	}
 	slices.SortFunc(out, func(a, b Task) int { return strings.Compare(a.ID, b.ID) })
 	return out
+}
+
+// CreateTask creates a new task with auto-generated ID and returns the task ID.
+func (s *TaskStore) CreateTask(subject, description, activeForm string) (string, error) {
+	if s == nil {
+		return "", errors.New("task store is nil")
+	}
+	subject = strings.TrimSpace(subject)
+	if subject == "" {
+		return "", errors.New("subject cannot be empty")
+	}
+	activeForm = strings.TrimSpace(activeForm)
+	if activeForm == "" {
+		return "", errors.New("activeForm cannot be empty")
+	}
+	description = strings.TrimSpace(description)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.tasks == nil {
+		s.tasks = map[string]Task{}
+	}
+
+	s.nextID++
+	id := fmt.Sprintf("task-%d", s.nextID)
+	s.tasks[id] = Task{
+		ID:          id,
+		Title:       subject,
+		Description: description,
+		ActiveForm:  activeForm,
+		Status:      TaskStatusPending,
+	}
+	return id, nil
 }
 
 func normalizeTaskStatus(value string) string {
