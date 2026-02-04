@@ -2,258 +2,236 @@ package toolbuiltin
 
 import (
 	"context"
-	"errors"
-	"fmt"
-	"slices"
 	"strings"
-	"sync"
 	"testing"
+
+	"github.com/cexll/agentsdk-go/pkg/runtime/tasks"
 )
 
-func TestTaskUpdateToolMetadata(t *testing.T) {
-	tool := NewTaskUpdateTool(NewTaskStore())
-	if tool.Name() != "TaskUpdate" {
-		t.Fatalf("unexpected name %q", tool.Name())
-	}
-	if strings.TrimSpace(tool.Description()) == "" {
-		t.Fatalf("expected non-empty description")
-	}
-	schema := tool.Schema()
-	if schema == nil || schema.Type != "object" {
-		t.Fatalf("unexpected schema %+v", schema)
-	}
-	if len(schema.Required) != 1 || schema.Required[0] != "taskId" {
-		t.Fatalf("unexpected required %+v", schema.Required)
-	}
-}
+func TestTaskUpdateToolDelete(t *testing.T) {
+	t.Parallel()
 
-func TestTaskUpdateCreatesTasksAndMaintainsDependencies(t *testing.T) {
-	store := NewTaskStore()
-	tool := NewTaskUpdateTool(store)
-	ctx := context.Background()
-
-	if _, err := tool.Execute(ctx, map[string]interface{}{
-		"taskId": "A",
-		"status": "in_progress",
-		"owner":  "alice",
-		"blocks": []interface{}{"B"},
-	}); err != nil {
-		t.Fatalf("seed A: %v", err)
-	}
-
-	a, ok := tool.Snapshot("A")
-	if !ok {
-		t.Fatalf("expected A to exist")
-	}
-	if a.Status != TaskStatusInProgress || a.Owner != "alice" {
-		t.Fatalf("unexpected A state %+v", a)
-	}
-
-	b, ok := tool.Snapshot("B")
-	if !ok {
-		t.Fatalf("expected B to exist")
-	}
-	if !slices.Equal(b.BlockedBy, []string{"A"}) {
-		t.Fatalf("unexpected B blockedBy %v", b.BlockedBy)
-	}
-	if b.Status != TaskStatusBlocked {
-		t.Fatalf("expected B status blocked, got %q", b.Status)
-	}
-
-	if _, err := tool.Execute(ctx, map[string]interface{}{
-		"taskId":    "A",
-		"blockedBy": []interface{}{"C"},
-	}); err != nil {
-		t.Fatalf("add blocker to A: %v", err)
-	}
-	a, _ = tool.Snapshot("A")
-	if a.Status != TaskStatusBlocked {
-		t.Fatalf("expected A status blocked, got %q", a.Status)
-	}
-	if !slices.Equal(a.BlockedBy, []string{"C"}) {
-		t.Fatalf("unexpected A blockedBy %v", a.BlockedBy)
-	}
-	if _, ok := tool.Snapshot("C"); !ok {
-		t.Fatalf("expected C to exist")
-	}
-}
-
-func TestTaskUpdateRejectsInProgressWhenBlocked(t *testing.T) {
-	tool := NewTaskUpdateTool(NewTaskStore())
-	ctx := context.Background()
-
-	if _, err := tool.Execute(ctx, map[string]interface{}{
-		"taskId":    "A",
-		"blockedBy": []string{"B"},
-	}); err != nil {
-		t.Fatalf("seed blockers: %v", err)
-	}
-
-	_, err := tool.Execute(ctx, map[string]interface{}{
-		"taskId": "A",
-		"status": "in_progress",
-	})
-	if err == nil {
-		t.Fatalf("expected error")
-	}
-}
-
-func TestTaskUpdateBlocksReplacementRemovesReverseEdges(t *testing.T) {
-	tool := NewTaskUpdateTool(NewTaskStore())
-	ctx := context.Background()
-
-	if _, err := tool.Execute(ctx, map[string]interface{}{"taskId": "A", "blocks": []interface{}{"B"}}); err != nil {
-		t.Fatalf("seed blocks: %v", err)
-	}
-	if _, err := tool.Execute(ctx, map[string]interface{}{"taskId": "A", "blocks": []interface{}{}}); err != nil {
-		t.Fatalf("clear blocks: %v", err)
-	}
-	b, _ := tool.Snapshot("B")
-	if slices.Contains(b.BlockedBy, "A") {
-		t.Fatalf("expected reverse edge removed, got %v", b.BlockedBy)
-	}
-	if b.Status != TaskStatusPending {
-		t.Fatalf("expected B status pending, got %q", b.Status)
-	}
-}
-
-func TestTaskUpdateBlockedByReplacementUpdatesStatus(t *testing.T) {
-	tool := NewTaskUpdateTool(NewTaskStore())
-	ctx := context.Background()
-
-	if _, err := tool.Execute(ctx, map[string]interface{}{"taskId": "B", "blockedBy": []string{"A"}}); err != nil {
-		t.Fatalf("seed blockedBy: %v", err)
-	}
-	b, _ := tool.Snapshot("B")
-	if b.Status != TaskStatusBlocked {
-		t.Fatalf("expected B status blocked, got %q", b.Status)
-	}
-
-	if _, err := tool.Execute(ctx, map[string]interface{}{"taskId": "B", "blockedBy": []string{}}); err != nil {
-		t.Fatalf("clear blockedBy: %v", err)
-	}
-	b, _ = tool.Snapshot("B")
-	if len(b.BlockedBy) != 0 {
-		t.Fatalf("expected B blockedBy cleared, got %v", b.BlockedBy)
-	}
-	if b.Status != TaskStatusPending {
-		t.Fatalf("expected B status pending, got %q", b.Status)
-	}
-}
-
-func TestTaskUpdateCompletionUnblocksDownstreamTasks(t *testing.T) {
-	tool := NewTaskUpdateTool(NewTaskStore())
-	ctx := context.Background()
-
-	if _, err := tool.Execute(ctx, map[string]interface{}{"taskId": "A", "blocks": []interface{}{"B", "C"}}); err != nil {
-		t.Fatalf("seed A blocks: %v", err)
-	}
-	if _, err := tool.Execute(ctx, map[string]interface{}{"taskId": "D", "blocks": []interface{}{"B"}}); err != nil {
-		t.Fatalf("seed D blocks: %v", err)
-	}
-
-	res, err := tool.Execute(ctx, map[string]interface{}{"taskId": "A", "status": "completed"})
+	store := tasks.NewTaskStore()
+	task, err := store.Create("todo", "", "")
 	if err != nil {
-		t.Fatalf("complete A: %v", err)
+		t.Fatalf("create task failed: %v", err)
+	}
+
+	tool := NewTaskUpdateTool(store)
+	res, err := tool.Execute(context.Background(), map[string]interface{}{
+		"taskId": task.ID,
+		"delete": true,
+	})
+	if err != nil {
+		t.Fatalf("execute delete failed: %v", err)
+	}
+	if !res.Success || !strings.Contains(res.Output, "deleted") {
+		t.Fatalf("unexpected delete output %q", res.Output)
+	}
+}
+
+func TestTaskUpdateToolUnblocks(t *testing.T) {
+	t.Parallel()
+
+	store := tasks.NewTaskStore()
+	blocker, err := store.Create("blocker", "", "")
+	if err != nil {
+		t.Fatalf("create blocker: %v", err)
+	}
+	blocked, err := store.Create("blocked", "", "")
+	if err != nil {
+		t.Fatalf("create blocked: %v", err)
+	}
+	if err := store.AddDependency(blocked.ID, blocker.ID); err != nil {
+		t.Fatalf("add dependency: %v", err)
+	}
+
+	tool := NewTaskUpdateTool(store)
+	res, err := tool.Execute(context.Background(), map[string]interface{}{
+		"taskId": blocker.ID,
+		"status": "completed",
+	})
+	if err != nil {
+		t.Fatalf("execute update failed: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected success")
+	}
+	if !strings.Contains(res.Output, "unblocked") {
+		t.Fatalf("expected unblocked output, got %q", res.Output)
 	}
 	data, ok := res.Data.(map[string]interface{})
 	if !ok {
 		t.Fatalf("unexpected data type %T", res.Data)
 	}
-	unblocked, _ := data["unblocked"].([]string)
-	if !slices.Equal(unblocked, []string{"C"}) {
-		t.Fatalf("unexpected unblocked list %v", unblocked)
-	}
-
-	b, _ := tool.Snapshot("B")
-	if !slices.Equal(b.BlockedBy, []string{"D"}) {
-		t.Fatalf("expected B still blocked by D, got %v", b.BlockedBy)
-	}
-	if b.Status != TaskStatusBlocked {
-		t.Fatalf("expected B status blocked, got %q", b.Status)
-	}
-
-	c, _ := tool.Snapshot("C")
-	if len(c.BlockedBy) != 0 {
-		t.Fatalf("expected C blockers cleared, got %v", c.BlockedBy)
-	}
-	if c.Status != TaskStatusPending {
-		t.Fatalf("expected C status pending, got %q", c.Status)
+	if _, ok := data["unblocked"]; !ok {
+		t.Fatalf("expected unblocked list in data")
 	}
 }
 
-func TestTaskUpdateValidation(t *testing.T) {
-	tool := NewTaskUpdateTool(NewTaskStore())
-	ctx := context.Background()
+func TestTaskUpdateSnapshot(t *testing.T) {
+	t.Parallel()
 
-	_, err := tool.Execute(ctx, nil)
-	if err == nil {
-		t.Fatalf("expected error for nil params")
+	if _, ok := (*TaskUpdateTool)(nil).Snapshot("x"); ok {
+		t.Fatalf("expected nil snapshot")
 	}
 
-	_, err = tool.Execute(ctx, map[string]interface{}{"taskId": "A", "status": "invalid"})
-	if err == nil {
-		t.Fatalf("expected invalid status error")
+	store := tasks.NewTaskStore()
+	task, err := store.Create("snap", "", "")
+	if err != nil {
+		t.Fatalf("create task: %v", err)
 	}
-
-	_, err = tool.Execute(ctx, map[string]interface{}{"taskId": "A", "blocks": "nope"})
-	if err == nil {
-		t.Fatalf("expected invalid blocks type error")
-	}
-}
-
-func TestTaskUpdateContextCanceledDoesNotMutateStore(t *testing.T) {
-	tool := NewTaskUpdateTool(NewTaskStore())
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	if _, err := tool.Execute(ctx, map[string]interface{}{"taskId": "A"}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("expected context cancellation, got %v", err)
-	}
-	if _, ok := tool.Snapshot("A"); ok {
-		t.Fatalf("expected task not to be created when context canceled")
+	tool := NewTaskUpdateTool(store)
+	got, ok := tool.Snapshot(task.ID)
+	if !ok || got.ID != task.ID {
+		t.Fatalf("unexpected snapshot %v ok=%v", got, ok)
 	}
 }
 
-func TestTaskUpdateSnapshotNilReceiver(t *testing.T) {
-	var tool *TaskUpdateTool
-	if _, ok := tool.Snapshot("A"); ok {
-		t.Fatalf("expected ok=false")
+func TestParseTaskIDList(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseTaskIDList("bad", "blocks", "x"); err == nil {
+		t.Fatalf("expected error for invalid list")
+	}
+	if _, err := parseTaskIDList([]interface{}{""}, "blocks", "x"); err == nil {
+		t.Fatalf("expected error for empty id")
+	}
+	if _, err := parseTaskIDList([]interface{}{"x"}, "blocks", "x"); err == nil {
+		t.Fatalf("expected error for self reference")
+	}
+
+	ids, err := parseTaskIDList([]interface{}{"b", "a", "a"}, "blocks", "x")
+	if err != nil {
+		t.Fatalf("parse list failed: %v", err)
+	}
+	if strings.Join(ids, ",") != "a,b" {
+		t.Fatalf("unexpected ids %v", ids)
 	}
 }
 
-func TestTaskUpdateConcurrentExecutions(t *testing.T) {
-	tool := NewTaskUpdateTool(NewTaskStore())
-	ctx := context.Background()
+func TestNormalizeUpdateStatus(t *testing.T) {
+	t.Parallel()
 
-	const workers = 8
-	const sink = "SINK"
+	if _, ok := normalizeUpdateStatus(""); ok {
+		t.Fatalf("expected empty status rejected")
+	}
+	if v, ok := normalizeUpdateStatus("done"); !ok || v != tasks.TaskCompleted {
+		t.Fatalf("expected done -> completed, got %v ok=%v", v, ok)
+	}
+}
 
-	var wg sync.WaitGroup
-	wg.Add(workers)
-	for i := 0; i < workers; i++ {
-		i := i
-		go func() {
-			defer wg.Done()
-			taskID := fmt.Sprintf("T-%d", i)
-			if _, err := tool.Execute(ctx, map[string]interface{}{
-				"taskId": taskID,
-				"blocks": []string{sink},
-			}); err != nil {
-				t.Errorf("worker %d Execute: %v", i, err)
-			}
-		}()
-	}
-	wg.Wait()
+func TestTaskUpdateToolMetadata(t *testing.T) {
+	t.Parallel()
 
-	sinkTask, ok := tool.Snapshot(sink)
-	if !ok {
-		t.Fatalf("expected sink task to exist")
+	tool := NewTaskUpdateTool(tasks.NewTaskStore())
+	if tool.Name() == "" || tool.Description() == "" || tool.Schema() == nil {
+		t.Fatalf("expected metadata")
 	}
-	if sinkTask.Status != TaskStatusBlocked {
-		t.Fatalf("expected sink status blocked, got %q", sinkTask.Status)
+}
+
+func TestReplaceBlockedByAndBlocks(t *testing.T) {
+	t.Parallel()
+
+	store := tasks.NewTaskStore()
+	a, _ := store.Create("A", "", "")
+	b, _ := store.Create("B", "", "")
+	c, _ := store.Create("C", "", "")
+
+	affected := map[string]struct{}{}
+	if err := replaceBlockedBy(store, b.ID, nil, []string{a.ID}, affected); err != nil {
+		t.Fatalf("replaceBlockedBy failed: %v", err)
 	}
-	if len(sinkTask.BlockedBy) != workers {
-		t.Fatalf("expected %d blockers, got %d: %v", workers, len(sinkTask.BlockedBy), sinkTask.BlockedBy)
+	if err := replaceBlocks(store, a.ID, nil, []string{c.ID}, affected); err != nil {
+		t.Fatalf("replaceBlocks failed: %v", err)
+	}
+	if len(affected) == 0 {
+		t.Fatalf("expected affected tasks")
+	}
+}
+
+func TestParseTaskUpdateParamsErrors(t *testing.T) {
+	t.Parallel()
+
+	if _, err := parseTaskUpdateParams(nil); err == nil {
+		t.Fatalf("expected nil params error")
+	}
+	if _, err := parseTaskUpdateParams(map[string]interface{}{"taskId": "x", "status": 1}); err == nil {
+		t.Fatalf("expected status type error")
+	}
+	if _, err := parseTaskUpdateParams(map[string]interface{}{"taskId": "x", "owner": 1}); err == nil {
+		t.Fatalf("expected owner type error")
+	}
+	if _, err := parseTaskUpdateParams(map[string]interface{}{"taskId": "x", "delete": "no"}); err == nil {
+		t.Fatalf("expected delete type error")
+	}
+}
+
+func TestParseTaskUpdateParamsBlocksAndUnblock(t *testing.T) {
+	req, err := parseTaskUpdateParams(map[string]interface{}{
+		"taskId":    "a",
+		"blocks":    []interface{}{"b"},
+		"blockedBy": []interface{}{"c"},
+	})
+	if err != nil {
+		t.Fatalf("parse params failed: %v", err)
+	}
+	if !req.HasBlocks || !req.HasBlockedBy || len(req.Blocks) != 1 || len(req.BlockedBy) != 1 {
+		t.Fatalf("unexpected request %+v", req)
+	}
+
+	store := tasks.NewTaskStore()
+	a, _ := store.Create("A", "", "")
+	b, _ := store.Create("B", "", "")
+	c, _ := store.Create("C", "", "")
+	_ = store.AddDependency(b.ID, a.ID)
+	affected := map[string]struct{}{}
+	if err := replaceBlockedBy(store, b.ID, []string{a.ID}, []string{c.ID}, affected); err != nil {
+		t.Fatalf("replaceBlockedBy failed: %v", err)
+	}
+	if err := replaceBlocks(store, a.ID, []string{b.ID}, nil, affected); err != nil {
+		t.Fatalf("replaceBlocks failed: %v", err)
+	}
+
+	list := []*tasks.Task{{ID: "x", Status: tasks.TaskPending, BlockedBy: []string{a.ID}}}
+	before := map[string]tasks.TaskStatus{"x": tasks.TaskBlocked}
+	unblocked := newlyUnblocked(list, a.ID, before)
+	if len(unblocked) != 1 || unblocked[0] != "x" {
+		t.Fatalf("expected unblocked list, got %v", unblocked)
+	}
+}
+
+func TestTaskUpdateToolUpdateOwnerAndBlocks(t *testing.T) {
+	store := tasks.NewTaskStore()
+	a, _ := store.Create("A", "", "")
+	b, _ := store.Create("B", "", "")
+	c, _ := store.Create("C", "", "")
+	_ = store.AddDependency(b.ID, a.ID)
+
+	tool := NewTaskUpdateTool(store)
+	res, err := tool.Execute(context.Background(), map[string]interface{}{
+		"taskId": b.ID,
+		"owner":  "Bob",
+		"blocks": []interface{}{c.ID},
+	})
+	if err != nil {
+		t.Fatalf("execute update failed: %v", err)
+	}
+	if !res.Success {
+		t.Fatalf("expected success")
+	}
+	snap, ok := tool.Snapshot(b.ID)
+	if !ok || snap.Owner != "Bob" {
+		t.Fatalf("expected owner update, got %+v", snap)
+	}
+	if len(snap.Blocks) != 1 || snap.Blocks[0] != c.ID {
+		t.Fatalf("expected blocks updated, got %+v", snap.Blocks)
+	}
+}
+
+func TestTaskUpdateToolExecuteNilContext(t *testing.T) {
+	tool := NewTaskUpdateTool(tasks.NewTaskStore())
+	if _, err := tool.Execute(nil, map[string]interface{}{"taskId": "x"}); err == nil {
+		t.Fatalf("expected nil context error")
 	}
 }

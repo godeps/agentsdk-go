@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/cexll/agentsdk-go/pkg/runtime/tasks"
 	"github.com/cexll/agentsdk-go/pkg/tool"
 )
 
@@ -36,10 +37,10 @@ var taskCreateSchema = &tool.JSONSchema{
 }
 
 type TaskCreateTool struct {
-	store *TaskStore
+	store *tasks.TaskStore
 }
 
-func NewTaskCreateTool(store *TaskStore) *TaskCreateTool {
+func NewTaskCreateTool(store *tasks.TaskStore) *TaskCreateTool {
 	return &TaskCreateTool{store: store}
 }
 
@@ -63,9 +64,13 @@ func (t *TaskCreateTool) Execute(ctx context.Context, params map[string]interfac
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	taskID, err := t.store.CreateTask(subject, description, activeForm)
+	created, err := t.store.Create(subject, description, activeForm)
 	if err != nil {
 		return nil, err
+	}
+	taskID := ""
+	if created != nil {
+		taskID = created.ID
 	}
 	payload := map[string]interface{}{
 		"taskId": taskID,

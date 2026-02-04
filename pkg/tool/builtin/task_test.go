@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
+	"github.com/cexll/agentsdk-go/pkg/runtime/tasks"
 	"github.com/cexll/agentsdk-go/pkg/tool"
 )
 
@@ -219,7 +220,7 @@ func TestParseTaskParamsModelAliases(t *testing.T) {
 // TestTaskToolsShareSameStore verifies that TaskCreate, TaskList, TaskGet, and TaskUpdate
 // all operate on the same TaskStore instance.
 func TestTaskToolsShareSameStore(t *testing.T) {
-	store := NewTaskStore()
+	store := tasks.NewTaskStore()
 
 	createTool := NewTaskCreateTool(store)
 	listTool := NewTaskListTool(store)
@@ -256,11 +257,11 @@ func TestTaskToolsShareSameStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TaskGet failed: %v", err)
 	}
-	getTask := getRes.Data.(map[string]interface{})["task"].(Task)
-	if getTask.Title != "Test Task" {
-		t.Fatalf("expected title 'Test Task', got %q", getTask.Title)
+	getTask := getRes.Data.(map[string]interface{})["task"].(tasks.Task)
+	if getTask.Subject != "Test Task" {
+		t.Fatalf("expected subject 'Test Task', got %q", getTask.Subject)
 	}
-	if getTask.Status != TaskStatusPending {
+	if getTask.Status != tasks.TaskPending {
 		t.Fatalf("expected status pending, got %q", getTask.Status)
 	}
 
@@ -280,8 +281,8 @@ func TestTaskToolsShareSameStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TaskGet after update failed: %v", err)
 	}
-	getTask2 := getRes2.Data.(map[string]interface{})["task"].(Task)
-	if getTask2.Status != TaskStatusInProgress {
+	getTask2 := getRes2.Data.(map[string]interface{})["task"].(tasks.Task)
+	if getTask2.Status != tasks.TaskInProgress {
 		t.Fatalf("expected status in_progress after update, got %q", getTask2.Status)
 	}
 
@@ -301,8 +302,8 @@ func TestTaskToolsShareSameStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TaskGet final failed: %v", err)
 	}
-	getTask3 := getRes3.Data.(map[string]interface{})["task"].(Task)
-	if getTask3.Status != TaskStatusCompleted {
+	getTask3 := getRes3.Data.(map[string]interface{})["task"].(tasks.Task)
+	if getTask3.Status != tasks.TaskCompleted {
 		t.Fatalf("expected status completed, got %q", getTask3.Status)
 	}
 }

@@ -5,10 +5,12 @@ import (
 	"errors"
 	"strings"
 	"testing"
+
+	"github.com/cexll/agentsdk-go/pkg/runtime/tasks"
 )
 
 func TestTaskGetToolMetadata(t *testing.T) {
-	tool := NewTaskGetTool(NewTaskStore())
+	tool := NewTaskGetTool(tasks.NewTaskStore())
 	if tool.Name() != "TaskGet" {
 		t.Fatalf("unexpected name %q", tool.Name())
 	}
@@ -25,14 +27,14 @@ func TestTaskGetToolMetadata(t *testing.T) {
 }
 
 func TestTaskGetToolNilContextHandling(t *testing.T) {
-	tool := NewTaskGetTool(NewTaskStore())
+	tool := NewTaskGetTool(tasks.NewTaskStore())
 	if _, err := tool.Execute(nil, map[string]interface{}{"taskId": "x"}); err == nil || !strings.Contains(err.Error(), "context is nil") {
 		t.Fatalf("expected context is nil error, got %v", err)
 	}
 }
 
 func TestTaskGetToolCancelledContextReturnsError(t *testing.T) {
-	tool := NewTaskGetTool(NewTaskStore())
+	tool := NewTaskGetTool(tasks.NewTaskStore())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := tool.Execute(ctx, map[string]interface{}{"taskId": "x"}); err == nil || !errors.Is(err, context.Canceled) {
@@ -41,40 +43,57 @@ func TestTaskGetToolCancelledContextReturnsError(t *testing.T) {
 }
 
 func TestTaskGetToolReturnsBlocksAndBlockedBy(t *testing.T) {
-	store := NewTaskStore()
-	if err := store.Upsert(Task{ID: "t1", Title: "root", Status: TaskStatusInProgress, Owner: "alice"}); err != nil {
-		t.Fatalf("seed t1: %v", err)
+	store := tasks.NewTaskStore()
+	ctx := context.Background()
+
+	root, err := store.Create("root", "", "f")
+	if err != nil {
+		t.Fatalf("create root: %v", err)
 	}
-	if err := store.Upsert(Task{ID: "t2", Title: "child", Status: TaskStatusBlocked, Owner: "bob", BlockedBy: []string{"t1"}}); err != nil {
-		t.Fatalf("seed t2: %v", err)
+	ownerAlice := "alice"
+	inProgress := tasks.TaskInProgress
+	if _, err := store.Update(root.ID, tasks.TaskUpdate{Owner: &ownerAlice, Status: &inProgress}); err != nil {
+		t.Fatalf("update root: %v", err)
+	}
+
+	child, err := store.Create("child", "", "f")
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+	ownerBob := "bob"
+	if _, err := store.Update(child.ID, tasks.TaskUpdate{Owner: &ownerBob}); err != nil {
+		t.Fatalf("update child: %v", err)
+	}
+	if err := store.AddDependency(child.ID, root.ID); err != nil {
+		t.Fatalf("add dependency: %v", err)
 	}
 	tool := NewTaskGetTool(store)
 
-	res, err := tool.Execute(context.Background(), map[string]interface{}{"taskId": "t1"})
+	res, err := tool.Execute(ctx, map[string]interface{}{"taskId": root.ID})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if res == nil || !res.Success {
 		t.Fatalf("unexpected result %+v", res)
 	}
-	if !strings.Contains(res.Output, "task t1") {
+	if !strings.Contains(res.Output, "task "+root.ID) {
 		t.Fatalf("unexpected output:\n%s", res.Output)
 	}
-	if !strings.Contains(res.Output, "blocks:") || !strings.Contains(res.Output, "t2") {
+	if !strings.Contains(res.Output, "blocks:") || !strings.Contains(res.Output, child.ID) {
 		t.Fatalf("expected blocks info, got:\n%s", res.Output)
 	}
 
-	res, err = tool.Execute(context.Background(), map[string]interface{}{"taskId": "t2"})
+	res, err = tool.Execute(ctx, map[string]interface{}{"taskId": child.ID})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(res.Output, "blockedBy:") || !strings.Contains(res.Output, "t1") {
+	if !strings.Contains(res.Output, "blockedBy:") || !strings.Contains(res.Output, root.ID) {
 		t.Fatalf("expected blockedBy info, got:\n%s", res.Output)
 	}
 }
 
 func TestTaskGetToolValidation(t *testing.T) {
-	tool := NewTaskGetTool(NewTaskStore())
+	tool := NewTaskGetTool(tasks.NewTaskStore())
 	ctx := context.Background()
 
 	cases := []struct {

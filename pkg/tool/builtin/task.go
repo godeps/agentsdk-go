@@ -108,7 +108,7 @@ var taskSchema = &tool.JSONSchema{
 		},
 		"resume": map[string]interface{}{
 			"type":        "string",
-			"description": "Optional agent ID to resume from. If provided, the agent will continue from the previous execution transcript.",
+			"description": "Optional resume/session identifier forwarded to the subagent handler (exposed as session_id). Resume semantics depend on the handler implementation.",
 		},
 	},
 	Required: []string{"description", "prompt", "subagent_type"},

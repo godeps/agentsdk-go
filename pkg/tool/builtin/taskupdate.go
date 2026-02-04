@@ -9,10 +9,11 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/cexll/agentsdk-go/pkg/runtime/tasks"
 	"github.com/cexll/agentsdk-go/pkg/tool"
 )
 
-const taskUpdateDescription = "Update a task's status, owner, and dependencies."
+const taskUpdateDescription = "Update a task's status, owner, and dependencies. Use delete=true to delete tasks."
 
 var taskUpdateSchema = &tool.JSONSchema{
 	Type: "object",
@@ -20,6 +21,10 @@ var taskUpdateSchema = &tool.JSONSchema{
 		"taskId": map[string]interface{}{
 			"type":        "string",
 			"description": "ID of the task to update.",
+		},
+		"delete": map[string]interface{}{
+			"type":        "boolean",
+			"description": "If true, delete the task (and reconcile dependencies) instead of updating it.",
 		},
 		"status": map[string]interface{}{
 			"type":        "string",
@@ -32,18 +37,18 @@ var taskUpdateSchema = &tool.JSONSchema{
 		},
 		"owner": map[string]interface{}{
 			"type":        "string",
-			"description": "Optional task owner.",
+			"description": "Optional task owner. Pass empty string to clear.",
 		},
 		"blocks": map[string]interface{}{
 			"type":        "array",
-			"description": "IDs of tasks blocked by this task.",
+			"description": "Replace the list of tasks blocked by this task.",
 			"items": map[string]interface{}{
 				"type": "string",
 			},
 		},
 		"blockedBy": map[string]interface{}{
 			"type":        "array",
-			"description": "IDs of tasks that block this task.",
+			"description": "Replace the list of tasks that block this task.",
 			"items": map[string]interface{}{
 				"type": "string",
 			},
@@ -54,11 +59,11 @@ var taskUpdateSchema = &tool.JSONSchema{
 
 type TaskUpdateTool struct {
 	mu       sync.Mutex
-	store    *TaskStore
+	store    *tasks.TaskStore
 	revision uint64
 }
 
-func NewTaskUpdateTool(store *TaskStore) *TaskUpdateTool {
+func NewTaskUpdateTool(store *tasks.TaskStore) *TaskUpdateTool {
 	return &TaskUpdateTool{store: store}
 }
 
@@ -86,89 +91,118 @@ func (t *TaskUpdateTool) Execute(ctx context.Context, params map[string]interfac
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	t.store.mu.Lock()
-	defer t.store.mu.Unlock()
-
-	if t.store.tasks == nil {
-		t.store.tasks = map[string]Task{}
+	if req.Delete {
+		if err := t.store.Delete(req.TaskID); err != nil {
+			return nil, err
+		}
+		t.revision++
+		revision := t.revision
+		payload := map[string]interface{}{
+			"taskId":    req.TaskID,
+			"deleted":   true,
+			"revision":  revision,
+			"affected":  nil,
+			"unblocked": nil,
+		}
+		return &tool.ToolResult{
+			Success: true,
+			Output:  formatTaskDeleteOutput(req.TaskID, revision),
+			Data:    payload,
+		}, nil
 	}
 
-	current, ok := t.store.tasks[req.TaskID]
-	if !ok {
-		current = Task{ID: req.TaskID, Status: TaskStatusPending}
+	current, err := t.store.Get(req.TaskID)
+	if err != nil {
+		return nil, err
 	}
 	oldStatus := current.Status
 
-	nextBlockedBy := current.BlockedBy
-	if req.HasBlockedBy {
-		nextBlockedBy = req.BlockedBy
-	}
-	if req.Status != nil && *req.Status == TaskStatusInProgress && len(nextBlockedBy) > 0 {
-		return nil, errors.New("cannot set status to in_progress while blockedBy is non-empty")
+	affected := map[string]struct{}{req.TaskID: {}}
+
+	var beforeBlocked map[string]tasks.TaskStatus
+	if req.Status != nil && *req.Status == tasks.TaskCompleted && oldStatus != tasks.TaskCompleted {
+		beforeBlocked = blockedBySnapshot(t.store.List(), req.TaskID)
 	}
 
+	if req.HasBlockedBy {
+		if err := replaceBlockedBy(t.store, req.TaskID, current.BlockedBy, req.BlockedBy, affected); err != nil {
+			return nil, err
+		}
+	}
+	if req.HasBlocks {
+		refreshed, err := t.store.Get(req.TaskID)
+		if err != nil {
+			return nil, err
+		}
+		if err := replaceBlocks(t.store, req.TaskID, refreshed.Blocks, req.Blocks, affected); err != nil {
+			return nil, err
+		}
+	}
+
+	var updates tasks.TaskUpdate
 	if req.Owner != nil {
-		current.Owner = strings.TrimSpace(*req.Owner)
+		owner := strings.TrimSpace(*req.Owner)
+		updates.Owner = &owner
 	}
 	if req.Status != nil {
-		current.Status = *req.Status
+		status := *req.Status
+		updates.Status = &status
 	}
-	if req.HasBlockedBy {
-		current.BlockedBy = req.BlockedBy
-		for _, blocker := range current.BlockedBy {
-			ensureTaskExistsLocked(t.store.tasks, blocker)
+	if updates.Owner != nil || updates.Status != nil {
+		if _, err := t.store.Update(req.TaskID, updates); err != nil {
+			return nil, err
 		}
 	}
 
-	affected := map[string]struct{}{current.ID: {}}
-	if req.HasBlocks {
-		applyBlocksLocked(t.store.tasks, current.ID, req.Blocks, affected)
-		for _, dep := range req.Blocks {
-			ensureTaskExistsLocked(t.store.tasks, dep)
-		}
+	updated, err := t.store.Get(req.TaskID)
+	if err != nil {
+		return nil, err
 	}
-
-	current = reconcileTaskLocked(current)
-	t.store.tasks[current.ID] = current
 
 	var unblocked []string
-	if oldStatus != TaskStatusCompleted && current.Status == TaskStatusCompleted {
-		unblocked = unblockDownstreamLocked(t.store.tasks, current.ID, affected)
+	if beforeBlocked != nil {
+		unblocked = newlyUnblocked(t.store.List(), req.TaskID, beforeBlocked)
+		for _, id := range unblocked {
+			affected[id] = struct{}{}
+		}
 	}
 
 	t.revision++
 	revision := t.revision
-	blocks := blocksForTaskLocked(t.store.tasks, current.ID)
 
 	payload := map[string]interface{}{
-		"task":     current,
-		"blocks":   blocks,
+		"task":     *updated,
 		"revision": revision,
 	}
 	if len(unblocked) > 0 {
 		payload["unblocked"] = unblocked
 	}
 	if len(affected) > 1 {
-		payload["affected"] = sortedKeys(affected, current.ID)
+		payload["affected"] = sortedKeys(affected, req.TaskID)
 	}
 
 	return &tool.ToolResult{
 		Success: true,
-		Output:  formatTaskUpdateOutput(current, blocks, unblocked, revision),
+		Output:  formatTaskUpdateOutput(*updated, unblocked, revision),
 		Data:    payload,
 	}, nil
 }
 
-func (t *TaskUpdateTool) Snapshot(taskID string) (Task, bool) {
+func (t *TaskUpdateTool) Snapshot(taskID string) (tasks.Task, bool) {
 	if t == nil || t.store == nil {
-		return Task{}, false
+		return tasks.Task{}, false
 	}
-	return t.store.Get(taskID)
+	task, err := t.store.Get(taskID)
+	if err != nil || task == nil {
+		return tasks.Task{}, false
+	}
+	return *task, true
 }
 
 type taskUpdateRequest struct {
 	TaskID       string
-	Status       *string
+	Delete       bool
+	Status       *tasks.TaskStatus
 	Owner        *string
 	Blocks       []string
 	HasBlocks    bool
@@ -186,13 +220,21 @@ func parseTaskUpdateParams(params map[string]interface{}) (taskUpdateRequest, er
 	}
 	req := taskUpdateRequest{TaskID: taskID}
 
+	if raw, ok := params["delete"]; ok && raw != nil {
+		val, ok := raw.(bool)
+		if !ok {
+			return taskUpdateRequest{}, fmt.Errorf("delete must be boolean, got %T", raw)
+		}
+		req.Delete = val
+	}
+
 	if raw, ok := params["status"]; ok && raw != nil {
 		value, err := coerceString(raw)
 		if err != nil {
 			return taskUpdateRequest{}, fmt.Errorf("status must be string: %w", err)
 		}
-		normalized := normalizeUpdateStatus(value)
-		if normalized == "" {
+		normalized, ok := normalizeUpdateStatus(value)
+		if !ok {
 			return taskUpdateRequest{}, fmt.Errorf("status %q is invalid", strings.TrimSpace(value))
 		}
 		req.Status = &normalized
@@ -231,19 +273,23 @@ func parseTaskUpdateParams(params map[string]interface{}) (taskUpdateRequest, er
 	return req, nil
 }
 
-func normalizeUpdateStatus(value string) string {
+func normalizeUpdateStatus(value string) (tasks.TaskStatus, bool) {
 	trimmed := strings.ToLower(strings.TrimSpace(value))
 	if trimmed == "" {
-		return ""
+		return "", false
 	}
 	trimmed = strings.ReplaceAll(trimmed, "-", "_")
 	switch trimmed {
-	case TaskStatusPending, TaskStatusInProgress, TaskStatusCompleted:
-		return trimmed
+	case TaskStatusPending:
+		return tasks.TaskPending, true
+	case TaskStatusInProgress:
+		return tasks.TaskInProgress, true
+	case TaskStatusCompleted:
+		return tasks.TaskCompleted, true
 	case "complete", "done":
-		return TaskStatusCompleted
+		return tasks.TaskCompleted, true
 	default:
-		return ""
+		return "", false
 	}
 }
 
@@ -288,34 +334,7 @@ func parseTaskIDList(value interface{}, field, selfID string) ([]string, error) 
 	return out, nil
 }
 
-func ensureTaskExistsLocked(tasks map[string]Task, id string) {
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return
-	}
-	if _, ok := tasks[id]; ok {
-		return
-	}
-	tasks[id] = Task{ID: id, Status: TaskStatusPending}
-}
-
-func reconcileTaskLocked(task Task) Task {
-	task.Status = normalizeTaskStatus(task.Status)
-	if task.Status == TaskStatusCompleted {
-		return task
-	}
-	if len(task.BlockedBy) > 0 {
-		task.Status = TaskStatusBlocked
-		return task
-	}
-	if task.Status == TaskStatusBlocked {
-		task.Status = TaskStatusPending
-	}
-	return task
-}
-
-func applyBlocksLocked(tasks map[string]Task, blockerID string, desired []string, touched map[string]struct{}) {
-	existing := blocksForTaskLocked(tasks, blockerID)
+func replaceBlockedBy(store *tasks.TaskStore, taskID string, existing, desired []string, affected map[string]struct{}) error {
 	existingSet := make(map[string]struct{}, len(existing))
 	for _, id := range existing {
 		existingSet[id] = struct{}{}
@@ -329,104 +348,101 @@ func applyBlocksLocked(tasks map[string]Task, blockerID string, desired []string
 		if _, ok := desiredSet[id]; ok {
 			continue
 		}
-		task := tasks[id]
-		next := removeTaskID(task.BlockedBy, blockerID)
-		if slices.Equal(next, task.BlockedBy) {
-			continue
+		if err := store.RemoveDependency(taskID, id); err != nil {
+			return err
 		}
-		task.BlockedBy = next
-		task = reconcileTaskLocked(task)
-		tasks[id] = task
-		touched[id] = struct{}{}
+		affected[taskID] = struct{}{}
+		affected[id] = struct{}{}
 	}
 
 	for _, id := range desired {
 		if _, ok := existingSet[id]; ok {
 			continue
 		}
-		task, ok := tasks[id]
+		if err := store.AddDependency(taskID, id); err != nil {
+			return err
+		}
+		affected[taskID] = struct{}{}
+		affected[id] = struct{}{}
+	}
+
+	return nil
+}
+
+func replaceBlocks(store *tasks.TaskStore, blockerID string, existing, desired []string, affected map[string]struct{}) error {
+	existingSet := make(map[string]struct{}, len(existing))
+	for _, id := range existing {
+		existingSet[id] = struct{}{}
+	}
+	desiredSet := make(map[string]struct{}, len(desired))
+	for _, id := range desired {
+		desiredSet[id] = struct{}{}
+	}
+
+	for _, id := range existing {
+		if _, ok := desiredSet[id]; ok {
+			continue
+		}
+		if err := store.RemoveDependency(id, blockerID); err != nil {
+			return err
+		}
+		affected[blockerID] = struct{}{}
+		affected[id] = struct{}{}
+	}
+
+	for _, id := range desired {
+		if _, ok := existingSet[id]; ok {
+			continue
+		}
+		if err := store.AddDependency(id, blockerID); err != nil {
+			return err
+		}
+		affected[blockerID] = struct{}{}
+		affected[id] = struct{}{}
+	}
+	return nil
+}
+
+func blockedBySnapshot(list []*tasks.Task, blockerID string) map[string]tasks.TaskStatus {
+	snapshot := make(map[string]tasks.TaskStatus)
+	for _, task := range list {
+		if task == nil {
+			continue
+		}
+		if slices.Contains(task.BlockedBy, blockerID) {
+			snapshot[task.ID] = task.Status
+		}
+	}
+	return snapshot
+}
+
+func newlyUnblocked(list []*tasks.Task, blockerID string, before map[string]tasks.TaskStatus) []string {
+	if len(before) == 0 {
+		return nil
+	}
+	var out []string
+	for _, task := range list {
+		if task == nil {
+			continue
+		}
+		prev, ok := before[task.ID]
 		if !ok {
-			task = Task{ID: id, Status: TaskStatusPending}
-		}
-		task.BlockedBy = addTaskID(task.BlockedBy, blockerID)
-		task = reconcileTaskLocked(task)
-		tasks[id] = task
-		touched[id] = struct{}{}
-	}
-}
-
-func unblockDownstreamLocked(tasks map[string]Task, blockerID string, touched map[string]struct{}) []string {
-	var downstream []string
-	for id, task := range tasks {
-		if slices.Contains(task.BlockedBy, blockerID) {
-			downstream = append(downstream, id)
-		}
-	}
-	if len(downstream) == 0 {
-		return nil
-	}
-	sort.Strings(downstream)
-
-	var unblocked []string
-	for _, id := range downstream {
-		task := tasks[id]
-		before := len(task.BlockedBy)
-		task.BlockedBy = removeTaskID(task.BlockedBy, blockerID)
-		if len(task.BlockedBy) == before {
 			continue
 		}
-		wasBlocked := task.Status == TaskStatusBlocked
-		task = reconcileTaskLocked(task)
-		tasks[id] = task
-		touched[id] = struct{}{}
-		if wasBlocked && task.Status == TaskStatusPending {
-			unblocked = append(unblocked, id)
-		}
-	}
-	if len(unblocked) == 0 {
-		return nil
-	}
-	sort.Strings(unblocked)
-	return unblocked
-}
-
-func blocksForTaskLocked(tasks map[string]Task, blockerID string) []string {
-	var blocks []string
-	for id, task := range tasks {
-		if id == blockerID {
+		if prev != tasks.TaskBlocked {
 			continue
 		}
-		if slices.Contains(task.BlockedBy, blockerID) {
-			blocks = append(blocks, id)
-		}
-	}
-	if len(blocks) == 0 {
-		return nil
-	}
-	sort.Strings(blocks)
-	return blocks
-}
-
-func addTaskID(ids []string, id string) []string {
-	ids = append(ids, id)
-	out, _ := normalizeTaskIDs(ids)
-	return out
-}
-
-func removeTaskID(ids []string, id string) []string {
-	if len(ids) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(ids))
-	for _, existing := range ids {
-		if existing == id {
+		if !slices.Contains(task.BlockedBy, blockerID) {
 			continue
 		}
-		out = append(out, existing)
+		if task.Status == tasks.TaskPending {
+			out = append(out, task.ID)
+		}
 	}
 	if len(out) == 0 {
 		return nil
 	}
+	sort.Strings(out)
 	return out
 }
 
@@ -445,26 +461,45 @@ func sortedKeys(set map[string]struct{}, except string) []string {
 	return out
 }
 
-func formatTaskUpdateOutput(task Task, blocks []string, unblocked []string, revision uint64) string {
+func formatTaskDeleteOutput(taskID string, revision uint64) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "task %s\n", taskID)
+	b.WriteString("deleted: true\n")
+	fmt.Fprintf(&b, "revision: %d", revision)
+	return b.String()
+}
+
+func formatTaskUpdateOutput(task tasks.Task, unblocked []string, revision uint64) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "task %s\n", task.ID)
+	if strings.TrimSpace(task.Subject) != "" {
+		fmt.Fprintf(&b, "subject: %s\n", strings.TrimSpace(task.Subject))
+	}
 	fmt.Fprintf(&b, "status: %s\n", task.Status)
 	if strings.TrimSpace(task.Owner) != "" {
 		fmt.Fprintf(&b, "owner: %s\n", strings.TrimSpace(task.Owner))
 	}
-	if len(task.BlockedBy) == 0 {
+
+	blockedBy := append([]string(nil), task.BlockedBy...)
+	sort.Strings(blockedBy)
+	if len(blockedBy) == 0 {
 		b.WriteString("blockedBy: (none)\n")
 	} else {
-		fmt.Fprintf(&b, "blockedBy: %s\n", strings.Join(task.BlockedBy, ", "))
+		fmt.Fprintf(&b, "blockedBy: %s\n", strings.Join(blockedBy, ", "))
 	}
+
+	blocks := append([]string(nil), task.Blocks...)
+	sort.Strings(blocks)
 	if len(blocks) == 0 {
 		b.WriteString("blocks: (none)\n")
 	} else {
 		fmt.Fprintf(&b, "blocks: %s\n", strings.Join(blocks, ", "))
 	}
+
 	if len(unblocked) > 0 {
 		fmt.Fprintf(&b, "unblocked: %s\n", strings.Join(unblocked, ", "))
 	}
 	fmt.Fprintf(&b, "revision: %d", revision)
 	return b.String()
 }
+

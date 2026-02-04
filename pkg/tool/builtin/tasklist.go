@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/cexll/agentsdk-go/pkg/runtime/tasks"
 	"github.com/cexll/agentsdk-go/pkg/tool"
 )
 
@@ -33,10 +34,10 @@ var taskListSchema = &tool.JSONSchema{
 }
 
 type TaskListTool struct {
-	store *TaskStore
+	store *tasks.TaskStore
 }
 
-func NewTaskListTool(store *TaskStore) *TaskListTool {
+func NewTaskListTool(store *tasks.TaskStore) *TaskListTool {
 	return &TaskListTool{store: store}
 }
 
@@ -61,7 +62,7 @@ func (t *TaskListTool) Execute(ctx context.Context, params map[string]interface{
 		return nil, err
 	}
 
-	all := t.store.List()
+	all := snapshotTasks(t.store.List())
 	filtered := filterTasks(all, filterStatus, filterOwner)
 	counts := countTasksByStatus(filtered)
 	order, depth, blocks := taskDisplayOrder(filtered)
@@ -76,6 +77,20 @@ func (t *TaskListTool) Execute(ctx context.Context, params map[string]interface{
 			"counts": counts,
 		},
 	}, nil
+}
+
+func snapshotTasks(input []*tasks.Task) []tasks.Task {
+	if len(input) == 0 {
+		return nil
+	}
+	out := make([]tasks.Task, 0, len(input))
+	for _, task := range input {
+		if task == nil {
+			continue
+		}
+		out = append(out, *task)
+	}
+	return out
 }
 
 func parseTaskListParams(params map[string]interface{}) (string, string, error) {
@@ -107,13 +122,13 @@ func parseTaskListParams(params map[string]interface{}) (string, string, error) 
 	return status, owner, nil
 }
 
-func filterTasks(tasks []Task, status, owner string) []Task {
-	if len(tasks) == 0 {
+func filterTasks(taskList []tasks.Task, status, owner string) []tasks.Task {
+	if len(taskList) == 0 {
 		return nil
 	}
-	var out []Task
-	for _, task := range tasks {
-		if status != "" && task.Status != status {
+	var out []tasks.Task
+	for _, task := range taskList {
+		if status != "" && string(task.Status) != status {
 			continue
 		}
 		if owner != "" && !strings.EqualFold(task.Owner, owner) {
@@ -124,32 +139,33 @@ func filterTasks(tasks []Task, status, owner string) []Task {
 	return out
 }
 
-func countTasksByStatus(tasks []Task) map[string]int {
+func countTasksByStatus(taskList []tasks.Task) map[string]int {
 	counts := map[string]int{
 		TaskStatusPending:    0,
 		TaskStatusInProgress: 0,
 		TaskStatusCompleted:  0,
 		TaskStatusBlocked:    0,
 	}
-	for _, task := range tasks {
-		if _, ok := counts[task.Status]; ok {
-			counts[task.Status]++
+	for _, task := range taskList {
+		status := string(task.Status)
+		if _, ok := counts[status]; ok {
+			counts[status]++
 		}
 	}
 	return counts
 }
 
-func taskDisplayOrder(tasks []Task) ([]string, map[string]int, map[string][]string) {
-	if len(tasks) == 0 {
+func taskDisplayOrder(taskList []tasks.Task) ([]string, map[string]int, map[string][]string) {
+	if len(taskList) == 0 {
 		return nil, nil, nil
 	}
-	byID := make(map[string]Task, len(tasks))
-	for _, task := range tasks {
+	byID := make(map[string]tasks.Task, len(taskList))
+	for _, task := range taskList {
 		byID[task.ID] = task
 	}
 
-	blocks := make(map[string][]string, len(tasks))
-	indegree := make(map[string]int, len(tasks))
+	blocks := make(map[string][]string, len(taskList))
+	indegree := make(map[string]int, len(taskList))
 	for id := range byID {
 		indegree[id] = 0
 	}
@@ -223,7 +239,7 @@ func taskDisplayOrder(tasks []Task) ([]string, map[string]int, map[string][]stri
 	return order, depth, blocks
 }
 
-func sortIDsByTaskKey(ids []string, tasks map[string]Task) {
+func sortIDsByTaskKey(ids []string, tasks map[string]tasks.Task) {
 	slices.SortFunc(ids, func(a, b string) int {
 		ta, ok := tasks[a]
 		if !ok {
@@ -233,7 +249,7 @@ func sortIDsByTaskKey(ids []string, tasks map[string]Task) {
 		if !ok {
 			return strings.Compare(a, b)
 		}
-		if pa, pb := taskStatusPriority(ta.Status), taskStatusPriority(tb.Status); pa != pb {
+		if pa, pb := taskStatusPriority(string(ta.Status)), taskStatusPriority(string(tb.Status)); pa != pb {
 			if pa < pb {
 				return -1
 			}
@@ -261,17 +277,17 @@ func taskStatusPriority(status string) int {
 	}
 }
 
-func formatTaskListOutput(tasks []Task, order []string, depth map[string]int, blocks map[string][]string, counts map[string]int) string {
-	if len(tasks) == 0 {
+func formatTaskListOutput(taskList []tasks.Task, order []string, depth map[string]int, blocks map[string][]string, counts map[string]int) string {
+	if len(taskList) == 0 {
 		return "no tasks"
 	}
-	byID := make(map[string]Task, len(tasks))
-	for _, task := range tasks {
+	byID := make(map[string]tasks.Task, len(taskList))
+	for _, task := range taskList {
 		byID[task.ID] = task
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "%d tasks (pending:%d, in_progress:%d, completed:%d, blocked:%d)\n",
-		len(tasks),
+		len(taskList),
 		counts[TaskStatusPending],
 		counts[TaskStatusInProgress],
 		counts[TaskStatusCompleted],
@@ -284,8 +300,8 @@ func formatTaskListOutput(tasks []Task, order []string, depth map[string]int, bl
 		}
 		prefix := strings.Repeat("  ", depth[id])
 		fmt.Fprintf(&b, "%s- [%s] %s", prefix, task.Status, task.ID)
-		if strings.TrimSpace(task.Title) != "" {
-			fmt.Fprintf(&b, " %s", strings.TrimSpace(task.Title))
+		if strings.TrimSpace(task.Subject) != "" {
+			fmt.Fprintf(&b, " %s", strings.TrimSpace(task.Subject))
 		}
 		if strings.TrimSpace(task.Owner) != "" {
 			fmt.Fprintf(&b, " (owner=%s)", strings.TrimSpace(task.Owner))

@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 
+	"github.com/cexll/agentsdk-go/pkg/runtime/tasks"
 	"github.com/cexll/agentsdk-go/pkg/tool"
 )
 
@@ -24,10 +24,10 @@ var taskGetSchema = &tool.JSONSchema{
 }
 
 type TaskGetTool struct {
-	store *TaskStore
+	store *tasks.TaskStore
 }
 
-func NewTaskGetTool(store *TaskStore) *TaskGetTool {
+func NewTaskGetTool(store *tasks.TaskStore) *TaskGetTool {
 	return &TaskGetTool{store: store}
 }
 
@@ -52,21 +52,20 @@ func (t *TaskGetTool) Execute(ctx context.Context, params map[string]interface{}
 		return nil, err
 	}
 
-	target, ok := t.store.Get(taskID)
-	if !ok {
-		return nil, fmt.Errorf("task %s not found", taskID)
+	target, err := t.store.Get(taskID)
+	if err != nil {
+		return nil, err
 	}
-	all := t.store.List()
 
-	blockedBy := taskRefsByID(target.BlockedBy, all)
-	blocks := taskRefsForBlocks(target.ID, all)
+	blockedBy := taskRefsFromTasks(t.store.GetBlockingTasks(taskID))
+	blocks := taskRefsFromTasks(t.store.GetBlockedTasks(taskID))
 
-	output := formatTaskGetOutput(target, blockedBy, blocks)
+	output := formatTaskGetOutput(*target, blockedBy, blocks)
 	return &tool.ToolResult{
 		Success: true,
 		Output:  output,
 		Data: map[string]interface{}{
-			"task":      target,
+			"task":      *target,
 			"blockedBy": blockedBy,
 			"blocks":    blocks,
 		},
@@ -74,61 +73,36 @@ func (t *TaskGetTool) Execute(ctx context.Context, params map[string]interface{}
 }
 
 type TaskRef struct {
-	ID     string `json:"id"`
-	Title  string `json:"title,omitempty"`
-	Status string `json:"status"`
-	Owner  string `json:"owner,omitempty"`
+	ID      string `json:"id"`
+	Subject string `json:"subject,omitempty"`
+	Status  string `json:"status"`
+	Owner   string `json:"owner,omitempty"`
 }
 
-func taskRefsByID(ids []string, tasks []Task) []TaskRef {
-	if len(ids) == 0 || len(tasks) == 0 {
+func taskRefsFromTasks(tasksList []*tasks.Task) []TaskRef {
+	if len(tasksList) == 0 {
 		return nil
 	}
-	byID := make(map[string]Task, len(tasks))
-	for _, task := range tasks {
-		byID[task.ID] = task
-	}
-	out := make([]TaskRef, 0, len(ids))
-	for _, id := range ids {
-		task, ok := byID[id]
-		if !ok {
-			out = append(out, TaskRef{ID: id, Status: ""})
+	out := make([]TaskRef, 0, len(tasksList))
+	for _, task := range tasksList {
+		if task == nil {
 			continue
 		}
 		out = append(out, TaskRef{
-			ID:     task.ID,
-			Title:  task.Title,
-			Status: task.Status,
-			Owner:  task.Owner,
+			ID:      task.ID,
+			Subject: task.Subject,
+			Status:  string(task.Status),
+			Owner:   task.Owner,
 		})
 	}
 	return out
 }
 
-func taskRefsForBlocks(id string, tasks []Task) []TaskRef {
-	if strings.TrimSpace(id) == "" || len(tasks) == 0 {
-		return nil
-	}
-	out := make([]TaskRef, 0)
-	for _, task := range tasks {
-		if slices.Contains(task.BlockedBy, id) {
-			out = append(out, TaskRef{
-				ID:     task.ID,
-				Title:  task.Title,
-				Status: task.Status,
-				Owner:  task.Owner,
-			})
-		}
-	}
-	slices.SortFunc(out, func(a, b TaskRef) int { return strings.Compare(a.ID, b.ID) })
-	return out
-}
-
-func formatTaskGetOutput(task Task, blockedBy []TaskRef, blocks []TaskRef) string {
+func formatTaskGetOutput(task tasks.Task, blockedBy []TaskRef, blocks []TaskRef) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "task %s\n", task.ID)
-	if strings.TrimSpace(task.Title) != "" {
-		fmt.Fprintf(&b, "title: %s\n", strings.TrimSpace(task.Title))
+	if strings.TrimSpace(task.Subject) != "" {
+		fmt.Fprintf(&b, "subject: %s\n", strings.TrimSpace(task.Subject))
 	}
 	fmt.Fprintf(&b, "status: %s\n", task.Status)
 	if strings.TrimSpace(task.Owner) != "" {
@@ -143,8 +117,8 @@ func formatTaskGetOutput(task Task, blockedBy []TaskRef, blocks []TaskRef) strin
 			if ref.Status != "" {
 				fmt.Fprintf(&b, " [%s]", ref.Status)
 			}
-			if strings.TrimSpace(ref.Title) != "" {
-				fmt.Fprintf(&b, " %s", strings.TrimSpace(ref.Title))
+			if strings.TrimSpace(ref.Subject) != "" {
+				fmt.Fprintf(&b, " %s", strings.TrimSpace(ref.Subject))
 			}
 			if strings.TrimSpace(ref.Owner) != "" {
 				fmt.Fprintf(&b, " (owner=%s)", strings.TrimSpace(ref.Owner))
@@ -160,8 +134,8 @@ func formatTaskGetOutput(task Task, blockedBy []TaskRef, blocks []TaskRef) strin
 	b.WriteString("blocks:\n")
 	for _, ref := range blocks {
 		fmt.Fprintf(&b, "- %s [%s]", ref.ID, ref.Status)
-		if strings.TrimSpace(ref.Title) != "" {
-			fmt.Fprintf(&b, " %s", strings.TrimSpace(ref.Title))
+		if strings.TrimSpace(ref.Subject) != "" {
+			fmt.Fprintf(&b, " %s", strings.TrimSpace(ref.Subject))
 		}
 		if strings.TrimSpace(ref.Owner) != "" {
 			fmt.Fprintf(&b, " (owner=%s)", strings.TrimSpace(ref.Owner))

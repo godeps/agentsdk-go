@@ -1,6 +1,7 @@
 package tasks
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"github.com/stretchr/testify/require"
@@ -209,6 +210,36 @@ func TestTaskStoreCycleDetection(t *testing.T) {
 		t.Fatalf("expected self dependency error, got %v", err)
 	}
 }
+
+func TestTaskStoreUniqueIDLockedErrors(t *testing.T) {
+	var store TaskStore
+
+	orig := rand.Reader
+	defer func() { rand.Reader = orig }()
+
+	rand.Reader = repeatReader{b: 1}
+	id, err := newTaskID()
+	if err != nil {
+		t.Fatalf("newTaskID: %v", err)
+	}
+	store.initLocked()
+	store.tasks[id] = &Task{ID: id}
+	if _, err := store.uniqueIDLocked(); err == nil {
+		t.Fatalf("expected unique id exhaustion")
+	}
+}
+
+type repeatReader struct {
+	b byte
+}
+
+func (r repeatReader) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = r.b
+	}
+	return len(p), nil
+}
+
 
 func TestTaskStoreRemoveDependencyUnblocks(t *testing.T) {
 	var store TaskStore
