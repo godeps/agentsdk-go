@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -98,13 +97,6 @@ func (p *OutputPersister) thresholdFor(toolName string) int {
 		return p.DefaultThresholdBytes
 	}
 	return defaultToolOutputThresholdBytes
-}
-
-func toolOutputBaseDir() string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(os.TempDir(), "agentsdk", "tool-output")
-	}
-	return filepath.Join(string(filepath.Separator), "tmp", "agentsdk", "tool-output")
 }
 
 func createToolOutputFile(dir string) (*os.File, string, error) {

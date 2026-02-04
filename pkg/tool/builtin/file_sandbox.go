@@ -1,6 +1,7 @@
 package toolbuiltin
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -79,6 +80,9 @@ func (f *fileSandbox) readFile(path string) (string, error) {
 	if f.maxBytes > 0 && int64(len(data)) > f.maxBytes {
 		return "", fmt.Errorf("file exceeds %d bytes limit", f.maxBytes)
 	}
+	if bytes.IndexByte(data, 0) >= 0 {
+		return "", fmt.Errorf("binary file %s is not supported", path)
+	}
 	return string(data), nil
 }
 
@@ -93,7 +97,7 @@ func (f *fileSandbox) writeFile(path string, content string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("ensure directory: %w", err)
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil { //nolint:gosec // intentional 0600 for security
+	if err := os.WriteFile(path, data, 0o666); err != nil { //nolint:gosec // respect umask for created files
 		return fmt.Errorf("write file: %w", err)
 	}
 	return nil

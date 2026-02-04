@@ -3,10 +3,12 @@ package tool
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
-	"net/url"
-	"os/exec"
+	"net/http"
+	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,20 +20,27 @@ import (
 type Registry struct {
 	mu          sync.RWMutex
 	tools       map[string]Tool
-	mcpSessions []*mcp.ClientSession
+	mcpSessions []*mcpSessionInfo
 	validator   Validator
 }
 
-var newMCPClient = func(ctx context.Context, spec string) (*mcp.ClientSession, error) {
-	return mcp.ConnectSession(ctx, spec)
+type mcpListChangedHandler = func(context.Context, *mcp.ClientSession)
+
+var newMCPClient = func(ctx context.Context, spec string, handler mcpListChangedHandler) (*mcp.ClientSession, error) {
+	return connectMCPClientWithOptions(ctx, spec, MCPServerOptions{}, handler)
 }
 
-const (
-	httpHintType      = "http"
-	sseHintType       = "sse"
-	stdioSchemePrefix = "stdio://"
-	sseSchemePrefix   = "sse://"
-)
+var buildMCPTransport = mcp.BuildSessionTransport
+
+type MCPServerOptions struct {
+	Headers map[string]string
+	Env     map[string]string
+	Timeout time.Duration
+}
+
+var newMCPClientWithOptions = func(ctx context.Context, spec string, opts MCPServerOptions, handler mcpListChangedHandler) (*mcp.ClientSession, error) {
+	return connectMCPClientWithOptions(ctx, spec, opts, handler)
+}
 
 // NewRegistry creates a registry backed by the default validator.
 func NewRegistry() *Registry {
@@ -128,7 +137,7 @@ func (r *Registry) RegisterMCPServer(ctx context.Context, serverPath, serverName
 	connectCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	session, err := newMCPClient(connectCtx, serverPath)
+	session, err := newMCPClient(connectCtx, serverPath, r.mcpToolsChangedHandler(serverPath))
 	if err != nil {
 		if ctxErr := connectCtx.Err(); ctxErr != nil {
 			return fmt.Errorf("connect MCP client: %w", ctxErr)
@@ -169,40 +178,81 @@ func (r *Registry) RegisterMCPServer(ctx context.Context, serverPath, serverName
 		return fmt.Errorf("MCP server returned no tools")
 	}
 
-	wrappers := make([]Tool, 0, len(tools))
-	for _, desc := range tools {
-		if strings.TrimSpace(desc.Name) == "" {
-			return fmt.Errorf("encountered MCP tool with empty name")
-		}
-		toolName := desc.Name
-		if serverName != "" {
-			toolName = fmt.Sprintf("%s__%s", serverName, desc.Name)
-		}
-		if r.hasTool(toolName) {
-			return fmt.Errorf("tool %s already registered", toolName)
-		}
-		schema, err := convertMCPSchema(desc.InputSchema)
-		if err != nil {
-			return fmt.Errorf("parse schema for %s: %w", desc.Name, err)
-		}
-		wrappers = append(wrappers, &remoteTool{
-			name:        toolName,
-			remoteName:  desc.Name,
-			description: desc.Description,
-			schema:      schema,
-			session:     session,
-		})
+	wrappers, names, err := buildRemoteToolWrappers(session, serverName, tools)
+	if err != nil {
+		return err
+	}
+	if err := r.registerMCPSession(serverPath, serverName, session, wrappers, names); err != nil {
+		return err
 	}
 
-	for _, tool := range wrappers {
-		if err := r.Register(tool); err != nil {
-			return err
-		}
+	success = true
+	return nil
+}
+
+func (r *Registry) RegisterMCPServerWithOptions(ctx context.Context, serverPath, serverName string, opts MCPServerOptions) error {
+	ctx = nonNilContext(ctx)
+	if strings.TrimSpace(serverPath) == "" {
+		return fmt.Errorf("server path is empty")
+	}
+	serverName = strings.TrimSpace(serverName)
+
+	timeout := opts.Timeout
+	if timeout <= 0 {
+		timeout = 10 * time.Second
 	}
 
-	r.mu.Lock()
-	r.mcpSessions = append(r.mcpSessions, session)
-	r.mu.Unlock()
+	connectCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	session, err := newMCPClientWithOptions(connectCtx, serverPath, opts, r.mcpToolsChangedHandler(serverPath))
+	if err != nil {
+		if ctxErr := connectCtx.Err(); ctxErr != nil {
+			return fmt.Errorf("connect MCP client: %w", ctxErr)
+		}
+		return fmt.Errorf("connect MCP client: %w", err)
+	}
+	if session == nil {
+		return fmt.Errorf("connect MCP client: session is nil")
+	}
+	success := false
+	defer func() {
+		if !success {
+			_ = session.Close()
+		}
+	}()
+
+	if err := connectCtx.Err(); err != nil {
+		return fmt.Errorf("initialize MCP client: connect context: %w", err)
+	}
+	if session.InitializeResult() == nil {
+		return fmt.Errorf("initialize MCP client: mcp session missing initialize result")
+	}
+	if err := connectCtx.Err(); err != nil {
+		return fmt.Errorf("connect MCP client: %w", err)
+	}
+
+	listCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	var tools []*mcp.Tool
+	for tool, iterErr := range session.Tools(listCtx, nil) {
+		if iterErr != nil {
+			return fmt.Errorf("list MCP tools: %w", iterErr)
+		}
+		tools = append(tools, tool)
+	}
+	if len(tools) == 0 {
+		return fmt.Errorf("MCP server returned no tools")
+	}
+
+	wrappers, names, err := buildRemoteToolWrappers(session, serverName, tools)
+	if err != nil {
+		return err
+	}
+	if err := r.registerMCPSession(serverPath, serverName, session, wrappers, names); err != nil {
+		return err
+	}
 
 	success = true
 	return nil
@@ -216,21 +266,414 @@ func (r *Registry) Close() {
 	r.mcpSessions = nil
 	r.mu.Unlock()
 
-	for _, session := range sessions {
-		if session == nil {
+	for _, info := range sessions {
+		if info == nil || info.session == nil {
 			continue
 		}
-		if err := session.Close(); err != nil {
+		if err := info.session.Close(); err != nil {
 			log.Printf("tool registry: close MCP session: %v", err)
 		}
 	}
 }
 
-func (r *Registry) hasTool(name string) bool {
+func connectMCPClientWithOptions(ctx context.Context, spec string, opts MCPServerOptions, handler mcpListChangedHandler) (*mcp.ClientSession, error) {
+	transport, err := buildMCPTransport(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	if err := applyMCPTransportOptions(transport, opts); err != nil {
+		return nil, err
+	}
+
+	var clientOpts *mcp.ClientOptions
+	if handler != nil {
+		clientOpts = &mcp.ClientOptions{
+			ToolListChangedHandler: func(ctx context.Context, req *mcp.ToolListChangedRequest) {
+				if req == nil || req.Session == nil {
+					return
+				}
+				handler(ctx, req.Session)
+			},
+		}
+	}
+	client := mcp.NewClient(&mcp.Implementation{Name: "agentsdk-go", Version: "dev"}, clientOpts)
+
+	dialCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancel()
+		case <-done:
+		}
+	}()
+
+	session, err := client.Connect(dialCtx, transport, nil)
+	close(done)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return session, nil
+}
+
+type mcpSessionInfo struct {
+	serverID   string
+	serverName string
+	sessionID  string
+	session    *mcp.ClientSession
+	toolNames  map[string]struct{}
+}
+
+func (r *Registry) registerMCPSession(serverID, serverName string, session *mcp.ClientSession, wrappers []Tool, names []string) error {
+	if session == nil {
+		return fmt.Errorf("mcp session is nil")
+	}
+	if len(wrappers) != len(names) {
+		return fmt.Errorf("mcp tools mismatch")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, name := range names {
+		if _, exists := r.tools[name]; exists {
+			return fmt.Errorf("tool %s already registered", name)
+		}
+	}
+	for i, tool := range wrappers {
+		r.tools[names[i]] = tool
+	}
+	info := &mcpSessionInfo{
+		serverID:   strings.TrimSpace(serverID),
+		serverName: strings.TrimSpace(serverName),
+		sessionID:  session.ID(),
+		session:    session,
+		toolNames:  toNameSet(names),
+	}
+	r.mcpSessions = append(r.mcpSessions, info)
+	return nil
+}
+
+func buildRemoteToolWrappers(session *mcp.ClientSession, serverName string, tools []*mcp.Tool) ([]Tool, []string, error) {
+	wrappers := make([]Tool, 0, len(tools))
+	names := make([]string, 0, len(tools))
+	seen := map[string]struct{}{}
+	for _, desc := range tools {
+		if desc == nil || strings.TrimSpace(desc.Name) == "" {
+			return nil, nil, fmt.Errorf("encountered MCP tool with empty name")
+		}
+		toolName := desc.Name
+		if serverName != "" {
+			toolName = fmt.Sprintf("%s__%s", serverName, desc.Name)
+		}
+		if _, ok := seen[toolName]; ok {
+			return nil, nil, fmt.Errorf("tool %s already registered", toolName)
+		}
+		seen[toolName] = struct{}{}
+		schema, err := convertMCPSchema(desc.InputSchema)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse schema for %s: %w", desc.Name, err)
+		}
+		wrappers = append(wrappers, &remoteTool{
+			name:        toolName,
+			remoteName:  desc.Name,
+			description: desc.Description,
+			schema:      schema,
+			session:     session,
+		})
+		names = append(names, toolName)
+	}
+	return wrappers, names, nil
+}
+
+func (r *Registry) mcpToolsChangedHandler(serverID string) mcpListChangedHandler {
+	if r == nil {
+		return nil
+	}
+	serverID = strings.TrimSpace(serverID)
+	return func(ctx context.Context, session *mcp.ClientSession) {
+		sessionID := ""
+		if session != nil {
+			sessionID = session.ID()
+		}
+		go func() {
+			refreshCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if err := r.refreshMCPTools(refreshCtx, serverID, sessionID); err != nil {
+				log.Printf("tool registry: refresh MCP tools: %v", err)
+			}
+		}()
+	}
+}
+
+func (r *Registry) refreshMCPTools(ctx context.Context, serverID, sessionID string) error {
+	if r == nil {
+		return fmt.Errorf("registry is nil")
+	}
+	serverID = strings.TrimSpace(serverID)
+	sessionID = strings.TrimSpace(sessionID)
+
+	var (
+		serverName string
+		session    *mcp.ClientSession
+	)
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	_, exists := r.tools[name]
-	return exists
+	for _, info := range r.mcpSessions {
+		if info == nil {
+			continue
+		}
+		if sessionID != "" && info.sessionID == sessionID {
+			serverName = info.serverName
+			session = info.session
+			break
+		}
+		if session == nil && serverID != "" && info.serverID == serverID {
+			serverName = info.serverName
+			session = info.session
+		}
+	}
+	r.mu.RUnlock()
+	if session == nil {
+		return fmt.Errorf("mcp session not found")
+	}
+
+	listCtx, cancel := context.WithTimeout(nonNilContext(ctx), 10*time.Second)
+	defer cancel()
+
+	var tools []*mcp.Tool
+	for tool, iterErr := range session.Tools(listCtx, nil) {
+		if iterErr != nil {
+			return fmt.Errorf("list MCP tools: %w", iterErr)
+		}
+		tools = append(tools, tool)
+	}
+	if len(tools) == 0 {
+		return fmt.Errorf("MCP server returned no tools")
+	}
+
+	wrappers, names, err := buildRemoteToolWrappers(session, serverName, tools)
+	if err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	info := r.findMCPSessionLocked(serverID, sessionID)
+	if info == nil {
+		return fmt.Errorf("mcp session not tracked")
+	}
+	for _, name := range names {
+		if _, exists := r.tools[name]; exists {
+			if info.toolNames == nil {
+				return fmt.Errorf("tool %s already registered", name)
+			}
+			if _, ok := info.toolNames[name]; !ok {
+				return fmt.Errorf("tool %s already registered", name)
+			}
+		}
+	}
+	for name := range info.toolNames {
+		delete(r.tools, name)
+	}
+	for i, tool := range wrappers {
+		r.tools[names[i]] = tool
+	}
+	info.toolNames = toNameSet(names)
+	if info.sessionID == "" {
+		info.sessionID = session.ID()
+	}
+	if info.serverID == "" {
+		info.serverID = serverID
+	}
+	if info.serverName == "" {
+		info.serverName = serverName
+	}
+	return nil
+}
+
+func (r *Registry) findMCPSessionLocked(serverID, sessionID string) *mcpSessionInfo {
+	serverID = strings.TrimSpace(serverID)
+	sessionID = strings.TrimSpace(sessionID)
+	for _, info := range r.mcpSessions {
+		if info == nil {
+			continue
+		}
+		if sessionID != "" && info.sessionID == sessionID {
+			return info
+		}
+		if info.sessionID == "" && info.session != nil && sessionID != "" && info.session.ID() == sessionID {
+			return info
+		}
+		if serverID != "" && info.serverID == serverID {
+			return info
+		}
+	}
+	return nil
+}
+
+func toNameSet(names []string) map[string]struct{} {
+	if len(names) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		out[name] = struct{}{}
+	}
+	return out
+}
+
+func applyMCPTransportOptions(transport mcp.Transport, opts MCPServerOptions) error {
+	if transport == nil {
+		return errors.New("mcp transport is nil")
+	}
+	if len(opts.Headers) == 0 && len(opts.Env) == 0 {
+		return nil
+	}
+
+	switch impl := transport.(type) {
+	case *mcp.CommandTransport:
+		if len(opts.Env) == 0 {
+			return nil
+		}
+		if impl == nil || impl.Command == nil {
+			return errors.New("mcp stdio transport missing command")
+		}
+		impl.Command.Env = mergeEnv(impl.Command.Env, opts.Env)
+	case *mcp.SSEClientTransport:
+		if len(opts.Headers) == 0 {
+			return nil
+		}
+		impl.HTTPClient = withInjectedHeaders(impl.HTTPClient, opts.Headers)
+	case *mcp.StreamableClientTransport:
+		if len(opts.Headers) == 0 {
+			return nil
+		}
+		impl.HTTPClient = withInjectedHeaders(impl.HTTPClient, opts.Headers)
+	}
+	return nil
+}
+
+func withInjectedHeaders(client *http.Client, headers map[string]string) *http.Client {
+	if len(headers) == 0 {
+		return client
+	}
+	if client == nil {
+		client = &http.Client{}
+	}
+
+	base := client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	client.Transport = &headerRoundTripper{
+		base:    base,
+		headers: normalizeHeaders(headers),
+	}
+	return client
+}
+
+func normalizeHeaders(headers map[string]string) http.Header {
+	if len(headers) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(headers))
+	for k := range headers {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := make(http.Header, len(keys))
+	for _, raw := range keys {
+		key := http.CanonicalHeaderKey(strings.TrimSpace(raw))
+		if key == "" {
+			continue
+		}
+		out.Set(key, strings.TrimSpace(headers[raw]))
+	}
+	return out
+}
+
+type headerRoundTripper struct {
+	base    http.RoundTripper
+	headers http.Header
+}
+
+func (h *headerRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := h.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if req == nil {
+		return nil, errors.New("request is nil")
+	}
+	if len(h.headers) == 0 {
+		return base.RoundTrip(req)
+	}
+
+	clone := req.Clone(req.Context())
+	clone.Header = clone.Header.Clone()
+	for k, vals := range h.headers {
+		clone.Header.Del(k)
+		for _, v := range vals {
+			if strings.TrimSpace(v) == "" {
+				continue
+			}
+			clone.Header.Add(k, v)
+		}
+	}
+	return base.RoundTrip(clone)
+}
+
+func mergeEnv(base []string, extra map[string]string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	if base == nil {
+		base = os.Environ()
+	}
+
+	keys := make([]string, 0, len(extra))
+	trimmed := make(map[string]string, len(extra))
+	for k, v := range extra {
+		key := strings.TrimSpace(k)
+		if key == "" {
+			continue
+		}
+		trimmed[key] = v
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	out := make([]string, 0, len(base)+len(keys))
+	seen := map[string]struct{}{}
+	for _, entry := range base {
+		k, _, ok := strings.Cut(entry, "=")
+		if !ok || k == "" {
+			continue
+		}
+		if _, ok := trimmed[k]; ok {
+			continue
+		}
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, entry)
+	}
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		out = append(out, fmt.Sprintf("%s=%s", key, trimmed[key]))
+	}
+	return out
 }
 
 func convertMCPSchema(raw any) (*JSONSchema, error) {
@@ -280,123 +723,6 @@ func convertMCPSchema(raw any) (*JSONSchema, error) {
 		}
 	}
 	return &schema, nil
-}
-
-// Compatibility wrappers keep registry tests aligned with the shared MCP
-// transport builders now hosted in the mcp package.
-func buildMCPSessionTransport(ctx context.Context, spec string) (mcp.Transport, error) {
-	spec = strings.TrimSpace(spec)
-	if spec == "" {
-		return nil, fmt.Errorf("mcp transport spec is empty")
-	}
-
-	lowered := strings.ToLower(spec)
-	switch {
-	case strings.HasPrefix(lowered, stdioSchemePrefix):
-		return buildStdioTransport(ctx, spec[len(stdioSchemePrefix):])
-	case strings.HasPrefix(lowered, sseSchemePrefix):
-		target := strings.TrimSpace(spec[len(sseSchemePrefix):])
-		return buildSSETransport(target, true)
-	}
-
-	if kind, endpoint, matched, err := parseHTTPFamilySpec(spec); err != nil {
-		return nil, err
-	} else if matched {
-		if kind == httpHintType {
-			return buildStreamableTransport(endpoint)
-		}
-		return buildSSETransport(endpoint, false)
-	}
-
-	if strings.HasPrefix(lowered, "http://") || strings.HasPrefix(lowered, "https://") {
-		return buildSSETransport(spec, false)
-	}
-
-	return buildStdioTransport(ctx, spec)
-}
-
-func buildSSETransport(endpoint string, allowSchemeGuess bool) (mcp.Transport, error) {
-	normalized, err := normalizeHTTPURL(endpoint, allowSchemeGuess)
-	if err != nil {
-		return nil, fmt.Errorf("invalid SSE endpoint: %w", err)
-	}
-	return &mcp.SSEClientTransport{Endpoint: normalized}, nil
-}
-
-func buildStreamableTransport(endpoint string) (mcp.Transport, error) {
-	normalized, err := normalizeHTTPURL(endpoint, false)
-	if err != nil {
-		return nil, fmt.Errorf("invalid streamable endpoint: %w", err)
-	}
-	return &mcp.StreamableClientTransport{Endpoint: normalized}, nil
-}
-
-func buildStdioTransport(ctx context.Context, cmdSpec string) (mcp.Transport, error) {
-	cmdSpec = strings.TrimSpace(cmdSpec)
-	parts := strings.Fields(cmdSpec)
-	if len(parts) == 0 {
-		return nil, fmt.Errorf("mcp stdio command is empty")
-	}
-	command := exec.CommandContext(nonNilContext(ctx), parts[0], parts[1:]...) // #nosec G204
-	return &mcp.CommandTransport{Command: command}, nil
-}
-
-func parseHTTPFamilySpec(spec string) (kind string, endpoint string, matched bool, err error) {
-	u, parseErr := url.Parse(strings.TrimSpace(spec))
-	if parseErr != nil || u.Scheme == "" {
-		return "", "", false, nil
-	}
-	scheme := strings.ToLower(u.Scheme)
-	base, hintRaw, hasHint := strings.Cut(scheme, "+")
-	if !hasHint {
-		return "", "", false, nil
-	}
-	if base != "http" && base != "https" {
-		return "", "", false, nil
-	}
-	hint := hintRaw
-	if idx := strings.IndexByte(hint, '+'); idx >= 0 {
-		hint = hint[:idx]
-	}
-	var resolvedKind string
-	switch hint {
-	case "sse":
-		resolvedKind = sseHintType
-	case "stream", "streamable", "http", "json":
-		resolvedKind = httpHintType
-	default:
-		return "", "", true, fmt.Errorf("unsupported HTTP transport hint %q", hint)
-	}
-	normalized := *u
-	normalized.Scheme = base
-	endpoint, normErr := normalizeHTTPURL(normalized.String(), false)
-	if normErr != nil {
-		return "", "", true, fmt.Errorf("invalid %s endpoint: %w", resolvedKind, normErr)
-	}
-	return resolvedKind, endpoint, true, nil
-}
-
-func normalizeHTTPURL(raw string, allowSchemeGuess bool) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", fmt.Errorf("endpoint is empty")
-	}
-	if allowSchemeGuess && !strings.Contains(raw, "://") {
-		raw = "https://" + raw
-	}
-	parsed, err := url.Parse(raw)
-	if err != nil {
-		return "", err
-	}
-	scheme := strings.ToLower(parsed.Scheme)
-	if scheme != "http" && scheme != "https" {
-		return "", fmt.Errorf("unsupported scheme %q", parsed.Scheme)
-	}
-	if parsed.Host == "" {
-		return "", fmt.Errorf("missing host")
-	}
-	parsed.Scheme = scheme
-	return parsed.String(), nil
 }
 
 func nonNilContext(ctx context.Context) context.Context {

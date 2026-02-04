@@ -446,6 +446,10 @@ func splitLines(data string) []string {
 	normalized := strings.ReplaceAll(data, "\r\n", "\n")
 	normalized = strings.ReplaceAll(normalized, "\r", "\n")
 	parts := strings.Split(normalized, "\n")
-	// Preserve trailing empty segments (real shells render blank lines).
+	// Match line-by-line readers (bufio.Scanner): a trailing "\n" terminates the
+	// last line but does not create an extra empty line token.
+	if strings.HasSuffix(normalized, "\n") && len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
 	return parts
 }

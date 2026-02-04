@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -595,7 +594,7 @@ func optionalAsyncTaskID(params map[string]interface{}) (string, error) {
 
 func generateAsyncTaskID() string {
 	var buf [4]byte
-	if _, err := rand.Read(buf[:]); err == nil {
+	if _, err := io.ReadFull(rand.Reader, buf[:]); err == nil {
 		return "task-" + hex.EncodeToString(buf[:])
 	}
 	return fmt.Sprintf("task-%d", time.Now().UnixNano())
@@ -776,13 +775,6 @@ func appendStderr(out *os.File, stdoutLen int64, stderrPath, stderrText string) 
 		}
 	}
 	return nil
-}
-
-func bashOutputBaseDir() string {
-	if runtime.GOOS == "windows" {
-		return filepath.Join(os.TempDir(), "agentsdk", "bash-output")
-	}
-	return filepath.Join(string(filepath.Separator), "tmp", "agentsdk", "bash-output")
 }
 
 func bashSessionID(ctx context.Context) string {
