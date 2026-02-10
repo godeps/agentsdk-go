@@ -155,6 +155,34 @@ func TestConvertMessages_UserWithContentBlocks(t *testing.T) {
 	}
 }
 
+func TestConvertMessages_UserContentMergedWithContentBlocks(t *testing.T) {
+	// When both Content (text) and ContentBlocks (image) exist,
+	// the text should be prepended as a text block alongside the content blocks.
+	msgs := []Message{
+		{
+			Role:    "user",
+			Content: "What is in this image?",
+			ContentBlocks: []ContentBlock{
+				{Type: ContentBlockImage, MediaType: "image/jpeg", Data: "base64data"},
+			},
+		},
+	}
+	_, params, err := convertMessages(msgs, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(params) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(params))
+	}
+	// Expect 2 blocks: text from Content + image from ContentBlocks
+	if len(params[0].Content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(params[0].Content))
+	}
+	if text := params[0].Content[0].GetText(); text == nil || *text != "What is in this image?" {
+		t.Fatalf("expected text block 'What is in this image?', got %v", text)
+	}
+}
+
 func TestConvertMessages_UserFallsBackToContent(t *testing.T) {
 	msgs := []Message{
 		{Role: "user", Content: "plain text"},

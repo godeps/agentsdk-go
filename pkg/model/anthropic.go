@@ -419,7 +419,11 @@ func convertMessages(msgs []Message, enableCache bool, defaults ...string) ([]an
 		default:
 			var content []anthropicsdk.ContentBlockParamUnion
 			if len(msg.ContentBlocks) > 0 {
-				content = convertContentBlocks(msg.ContentBlocks)
+				// Include text content alongside content blocks when both exist
+				if text := strings.TrimSpace(msg.Content); text != "" {
+					content = append(content, anthropicsdk.NewTextBlock(text))
+				}
+				content = append(content, convertContentBlocks(msg.ContentBlocks)...)
 			} else {
 				text := msg.Content
 				if strings.TrimSpace(text) == "" {
