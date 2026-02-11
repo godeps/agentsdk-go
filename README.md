@@ -319,9 +319,9 @@ if err != nil {
 defer rt.Close()
 ```
 
-- `EnabledBuiltinTools`: nil→全部内置；空切片→禁用内置；非空→只启用列出的内置（大小写不敏感，下划线命名）。  
-- `CustomTools`: 追加自定义工具；当 `Tools` 非空时被忽略。  
-- `Tools`: 旧字段，非空时完全接管工具集（保持向后兼容）。
+- `EnabledBuiltinTools`: nil → all built-ins; empty slice → none; non-empty → only the listed names (case-insensitive, underscore naming).
+- `CustomTools`: appended after built-ins; ignored when `Tools` is non-empty.
+- `Tools`: legacy field — when non-empty it takes over the entire tool set (kept for backward compatibility).
 
 See a runnable demo in `examples/05-custom-tools`.
 
