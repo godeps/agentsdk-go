@@ -662,7 +662,6 @@ func TestNewShellCommandPrefersBinShOnUnix(t *testing.T) {
 	}
 }
 
-
 // writeScript creates an executable shell script in dir and returns its path.
 func writeScript(t *testing.T, dir, name, content string) string {
 	t.Helper()
