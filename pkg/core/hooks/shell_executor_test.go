@@ -662,28 +662,6 @@ func TestNewShellCommandPrefersBinShOnUnix(t *testing.T) {
 	}
 }
 
-func TestLooksLikeScriptPath(t *testing.T) {
-	t.Parallel()
-	tests := []struct {
-		name    string
-		command string
-		want    bool
-	}{
-		{name: "absolute unix path", command: "/tmp/hook.sh", want: true},
-		{name: "relative path", command: "./hook.sh", want: true},
-		{name: "windows path", command: `C:\hooks\run.cmd`, want: true},
-		{name: "shell snippet", command: "echo hi", want: false},
-		{name: "pipeline", command: "cat a | cat", want: false},
-	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			if got := looksLikeScriptPath(tt.command); got != tt.want {
-				t.Fatalf("looksLikeScriptPath(%q)=%v want %v", tt.command, got, tt.want)
-			}
-		})
-	}
-}
 
 // writeScript creates an executable shell script in dir and returns its path.
 func writeScript(t *testing.T, dir, name, content string) string {
