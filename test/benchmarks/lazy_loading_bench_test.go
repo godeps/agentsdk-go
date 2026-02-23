@@ -9,11 +9,11 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/config"
-	"github.com/cexll/agentsdk-go/pkg/model"
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
+	"github.com/godeps/agentsdk-go/pkg/api"
+	"github.com/godeps/agentsdk-go/pkg/config"
+	"github.com/godeps/agentsdk-go/pkg/model"
+	"github.com/godeps/agentsdk-go/pkg/runtime/commands"
+	"github.com/godeps/agentsdk-go/pkg/runtime/skills"
 )
 
 const iterationsPerBenchmark = 100

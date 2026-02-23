@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/godeps/agentsdk-go/pkg/model"
 )
 
 // TokenStats captures token usage for a single model call.

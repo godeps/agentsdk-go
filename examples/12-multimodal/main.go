@@ -23,8 +23,8 @@ import (
 
 	"bytes"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	modelpkg "github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/godeps/agentsdk-go/pkg/api"
+	modelpkg "github.com/godeps/agentsdk-go/pkg/model"
 )
 
 func main() {

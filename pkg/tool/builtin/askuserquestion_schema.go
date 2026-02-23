@@ -1,6 +1,6 @@
 package toolbuiltin
 
-import "github.com/cexll/agentsdk-go/pkg/tool"
+import "github.com/godeps/agentsdk-go/pkg/tool"
 
 var askUserQuestionSchema = &tool.JSONSchema{
 	Type: "object",

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 
-	toolbuiltin "github.com/cexll/agentsdk-go/pkg/tool/builtin"
+	toolbuiltin "github.com/godeps/agentsdk-go/pkg/tool/builtin"
 )
 
 func main() {

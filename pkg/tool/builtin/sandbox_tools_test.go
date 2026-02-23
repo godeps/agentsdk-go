@@ -3,7 +3,7 @@ package toolbuiltin
 import (
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/security"
+	"github.com/godeps/agentsdk-go/pkg/security"
 )
 
 func TestCustomSandboxConstructors(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/middleware"
+	"github.com/godeps/agentsdk-go/pkg/middleware"
 )
 
 type scriptedModel struct {

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
+	"github.com/godeps/agentsdk-go/pkg/runtime/commands"
+	"github.com/godeps/agentsdk-go/pkg/runtime/skills"
+	"github.com/godeps/agentsdk-go/pkg/runtime/subagents"
 )
 
 type stringerType struct{}

@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/middleware"
-	"github.com/cexll/agentsdk-go/pkg/model"
-	"github.com/cexll/agentsdk-go/pkg/security"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/godeps/agentsdk-go/pkg/middleware"
+	"github.com/godeps/agentsdk-go/pkg/model"
+	"github.com/godeps/agentsdk-go/pkg/security"
+	"github.com/godeps/agentsdk-go/pkg/tool"
 )
 
 const (

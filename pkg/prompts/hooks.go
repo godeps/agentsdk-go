@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/core/events"
-	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
+	"github.com/godeps/agentsdk-go/pkg/core/events"
+	corehooks "github.com/godeps/agentsdk-go/pkg/core/hooks"
 )
 
 // hookConfig represents the JSON structure for hooks configuration.

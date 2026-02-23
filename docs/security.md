@@ -49,7 +49,7 @@ These layers cooperate with the 6 middleware hook points to enforce checks at cr
 
 ```go
 import (
-    "github.com/cexll/agentsdk-go/pkg/security"
+    "github.com/godeps/agentsdk-go/pkg/security"
 )
 
 // Create sandbox
@@ -143,7 +143,7 @@ validator.AllowShellMetachars(false) // disable for strict environments
 
 ```go
 import (
-    "github.com/cexll/agentsdk-go/pkg/security"
+    "github.com/godeps/agentsdk-go/pkg/security"
 )
 
 validator := security.NewValidator()
@@ -194,7 +194,7 @@ validator.BanFragment("sudo rm")
 
 ```go
 import (
-    "github.com/cexll/agentsdk-go/pkg/security"
+    "github.com/godeps/agentsdk-go/pkg/security"
 )
 
 queue, err := security.NewApprovalQueue("/var/lib/agent/approvals")

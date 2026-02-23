@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
+	"github.com/godeps/agentsdk-go/pkg/config"
 	"gopkg.in/yaml.v3"
 )
 

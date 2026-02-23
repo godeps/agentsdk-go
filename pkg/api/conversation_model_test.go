@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/agent"
-	"github.com/cexll/agentsdk-go/pkg/message"
-	"github.com/cexll/agentsdk-go/pkg/middleware"
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/godeps/agentsdk-go/pkg/agent"
+	"github.com/godeps/agentsdk-go/pkg/message"
+	"github.com/godeps/agentsdk-go/pkg/middleware"
+	"github.com/godeps/agentsdk-go/pkg/model"
 )
 
 func TestConversationModelGenerateNilModel(t *testing.T) {

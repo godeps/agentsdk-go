@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
-	"github.com/cexll/agentsdk-go/pkg/model"
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
-	"github.com/cexll/agentsdk-go/pkg/sandbox"
-	"github.com/cexll/agentsdk-go/pkg/security"
-	"github.com/cexll/agentsdk-go/pkg/tool"
-	toolbuiltin "github.com/cexll/agentsdk-go/pkg/tool/builtin"
+	"github.com/godeps/agentsdk-go/pkg/config"
+	"github.com/godeps/agentsdk-go/pkg/model"
+	"github.com/godeps/agentsdk-go/pkg/runtime/subagents"
+	"github.com/godeps/agentsdk-go/pkg/sandbox"
+	"github.com/godeps/agentsdk-go/pkg/security"
+	"github.com/godeps/agentsdk-go/pkg/tool"
+	toolbuiltin "github.com/godeps/agentsdk-go/pkg/tool/builtin"
 )
 
 type agentHelperStubTool struct {

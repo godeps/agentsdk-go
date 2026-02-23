@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/godeps/agentsdk-go/pkg/runtime/skills"
+	"github.com/godeps/agentsdk-go/pkg/tool"
 )
 
 const skillToolDescriptionHeader = `Execute a skill within the main conversation

@@ -4,8 +4,8 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/cexll/agentsdk-go/pkg/agent"
-	"github.com/cexll/agentsdk-go/pkg/middleware"
+	"github.com/godeps/agentsdk-go/pkg/agent"
+	"github.com/godeps/agentsdk-go/pkg/middleware"
 )
 
 // streamEmitFunc is stored on context so tools can push incremental output

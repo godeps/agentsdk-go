@@ -21,7 +21,7 @@ go version  # should show go1.24 or later
 ### Get the Source
 
 ```bash
-git clone https://github.com/cexll/agentsdk-go.git
+git clone https://github.com/godeps/agentsdk-go.git
 cd agentsdk-go
 ```
 
@@ -55,8 +55,8 @@ import (
     "log"
     "os"
 
-    "github.com/cexll/agentsdk-go/pkg/api"
-    "github.com/cexll/agentsdk-go/pkg/model"
+    "github.com/godeps/agentsdk-go/pkg/api"
+    "github.com/godeps/agentsdk-go/pkg/model"
 )
 
 func main() {
@@ -108,9 +108,9 @@ import (
     "os"
     "time"
 
-    "github.com/cexll/agentsdk-go/pkg/api"
-    "github.com/cexll/agentsdk-go/pkg/middleware"
-    "github.com/cexll/agentsdk-go/pkg/model"
+    "github.com/godeps/agentsdk-go/pkg/api"
+    "github.com/godeps/agentsdk-go/pkg/middleware"
+    "github.com/godeps/agentsdk-go/pkg/model"
 )
 
 func main() {
@@ -170,8 +170,8 @@ import (
     "log"
     "os"
 
-    "github.com/cexll/agentsdk-go/pkg/api"
-    "github.com/cexll/agentsdk-go/pkg/model"
+    "github.com/godeps/agentsdk-go/pkg/api"
+    "github.com/godeps/agentsdk-go/pkg/model"
 )
 
 func main() {
@@ -332,7 +332,7 @@ Configuration lives under `.claude/`:
 ### Load Config
 
 ```go
-import "github.com/cexll/agentsdk-go/pkg/config"
+import "github.com/godeps/agentsdk-go/pkg/config"
 
 loader := &config.SettingsLoader{ProjectRoot: "."}
 
@@ -405,7 +405,7 @@ import (
     "log"
     "time"
 
-    "github.com/cexll/agentsdk-go/pkg/middleware"
+    "github.com/godeps/agentsdk-go/pkg/middleware"
 )
 
 // 令牌桶限流器

@@ -796,7 +796,7 @@ type Request struct {
 
 ```go
 // go.mod
-module github.com/cexll/agentsdk-go
+module github.com/godeps/agentsdk-go
 
 go 1.24
 
@@ -852,8 +852,8 @@ import (
     "log"
     "os"
 
-    "github.com/cexll/agentsdk-go/pkg/api"
-    "github.com/cexll/agentsdk-go/pkg/model"
+    "github.com/godeps/agentsdk-go/pkg/api"
+    "github.com/godeps/agentsdk-go/pkg/model"
 )
 
 func main() {
@@ -897,7 +897,7 @@ import (
     "fmt"
     "log"
 
-    "github.com/cexll/agentsdk-go/pkg/api"
+    "github.com/godeps/agentsdk-go/pkg/api"
 )
 
 func main() {
@@ -942,8 +942,8 @@ import (
     "context"
     "os"
 
-    "github.com/cexll/agentsdk-go/pkg/api"
-    "github.com/cexll/agentsdk-go/pkg/model"
+    "github.com/godeps/agentsdk-go/pkg/api"
+    "github.com/godeps/agentsdk-go/pkg/model"
 )
 
 func main() {
@@ -986,8 +986,8 @@ import (
     "context"
     "fmt"
 
-    "github.com/cexll/agentsdk-go/pkg/api"
-    "github.com/cexll/agentsdk-go/pkg/tool"
+    "github.com/godeps/agentsdk-go/pkg/api"
+    "github.com/godeps/agentsdk-go/pkg/tool"
 )
 
 // DatabaseTool 自定义数据库工具

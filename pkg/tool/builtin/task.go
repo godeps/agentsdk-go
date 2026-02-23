@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/godeps/agentsdk-go/pkg/tool"
 )
 
 const taskToolDescription = `Launch a new agent to handle complex, multi-step tasks autonomously. 

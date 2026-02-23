@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
+	"github.com/godeps/agentsdk-go/pkg/api"
+	"github.com/godeps/agentsdk-go/pkg/runtime/commands"
 )
 
 func buildCommands() []api.CommandRegistration {

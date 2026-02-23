@@ -15,8 +15,8 @@ import (
 	"testing"
 	"testing/fstest"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/godeps/agentsdk-go/pkg/api"
+	"github.com/godeps/agentsdk-go/pkg/model"
 )
 
 //go:embed testdata/.claude/**

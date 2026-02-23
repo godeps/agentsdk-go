@@ -43,7 +43,7 @@ log.Printf("Output: %s", result.Output)
 ```
 
 ## 安装与环境
-- 安装：`go get github.com/cexll/agentsdk-go`
+- 安装：`go get github.com/godeps/agentsdk-go`
 - 环境：Go 1.24.0+，需设置 `ANTHROPIC_API_KEY`
 
 ## 已知问题
@@ -101,7 +101,7 @@ log.Printf("Output: %s", result.Output)
 ```
 
 ## Install & Requirements
-- Install: `go get github.com/cexll/agentsdk-go`
+- Install: `go get github.com/godeps/agentsdk-go`
 - Runtime: Go 1.24.0+, `ANTHROPIC_API_KEY` set
 
 ## Known Issues

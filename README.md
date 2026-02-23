@@ -134,7 +134,7 @@ User response
 ### Get the SDK
 
 ```bash
-go get github.com/cexll/agentsdk-go
+go get github.com/godeps/agentsdk-go
 ```
 
 ## Quick Start
@@ -161,8 +161,8 @@ import (
     "fmt"
     "log"
 
-    "github.com/cexll/agentsdk-go/pkg/api"
-    "github.com/cexll/agentsdk-go/pkg/model"
+    "github.com/godeps/agentsdk-go/pkg/api"
+    "github.com/godeps/agentsdk-go/pkg/model"
 )
 
 func main() {
@@ -202,8 +202,8 @@ import (
     "log"
     "time"
 
-    "github.com/cexll/agentsdk-go/pkg/api"
-    "github.com/cexll/agentsdk-go/pkg/middleware"
+    "github.com/godeps/agentsdk-go/pkg/api"
+    "github.com/godeps/agentsdk-go/pkg/middleware"
 )
 
 // Logging middleware using the Funcs helper

@@ -3,8 +3,8 @@ package api
 import (
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/message"
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/godeps/agentsdk-go/pkg/message"
+	"github.com/godeps/agentsdk-go/pkg/model"
 )
 
 func TestConvertMessages_WithContentBlocks(t *testing.T) {

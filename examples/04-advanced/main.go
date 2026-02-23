@@ -12,10 +12,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/api"
-	"github.com/cexll/agentsdk-go/pkg/config"
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/godeps/agentsdk-go/pkg/api"
+	"github.com/godeps/agentsdk-go/pkg/config"
+	"github.com/godeps/agentsdk-go/pkg/runtime/commands"
+	"github.com/godeps/agentsdk-go/pkg/tool"
 )
 
 type runConfig struct {

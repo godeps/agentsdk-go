@@ -8,14 +8,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
-	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
-	"github.com/cexll/agentsdk-go/pkg/model"
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
-	"github.com/cexll/agentsdk-go/pkg/sandbox"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/godeps/agentsdk-go/pkg/config"
+	coreevents "github.com/godeps/agentsdk-go/pkg/core/events"
+	corehooks "github.com/godeps/agentsdk-go/pkg/core/hooks"
+	"github.com/godeps/agentsdk-go/pkg/model"
+	"github.com/godeps/agentsdk-go/pkg/runtime/commands"
+	"github.com/godeps/agentsdk-go/pkg/runtime/skills"
+	"github.com/godeps/agentsdk-go/pkg/sandbox"
+	"github.com/godeps/agentsdk-go/pkg/tool"
 )
 
 type namedTool struct{ name string }

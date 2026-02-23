@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/middleware"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
+	"github.com/godeps/agentsdk-go/pkg/middleware"
+	"github.com/godeps/agentsdk-go/pkg/runtime/skills"
 )
 
 func TestSkillLazyLoadingDemo(t *testing.T) {

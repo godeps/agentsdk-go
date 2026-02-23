@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/security"
+	"github.com/godeps/agentsdk-go/pkg/security"
 )
 
 func TestManagerCheckToolPermissionLoadsAndAudits(t *testing.T) {

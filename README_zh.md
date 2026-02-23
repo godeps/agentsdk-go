@@ -120,7 +120,7 @@ after_agent   ← 响应格式化、指标采集
 ### 获取 SDK
 
 ```bash
-go get github.com/cexll/agentsdk-go
+go get github.com/godeps/agentsdk-go
 ```
 
 ## 快速开始
@@ -135,8 +135,8 @@ import (
     "log"
     "os"
 
-    "github.com/cexll/agentsdk-go/pkg/api"
-    "github.com/cexll/agentsdk-go/pkg/model"
+    "github.com/godeps/agentsdk-go/pkg/api"
+    "github.com/godeps/agentsdk-go/pkg/model"
 )
 
 func main() {
@@ -179,7 +179,7 @@ import (
     "log"
     "time"
 
-    "github.com/cexll/agentsdk-go/pkg/middleware"
+    "github.com/godeps/agentsdk-go/pkg/middleware"
 )
 
 // 日志中间件

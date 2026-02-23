@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/cexll/agentsdk-go/pkg/security"
+	"github.com/godeps/agentsdk-go/pkg/security"
 )
 
 var (

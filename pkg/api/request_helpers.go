@@ -5,9 +5,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
+	"github.com/godeps/agentsdk-go/pkg/runtime/commands"
+	"github.com/godeps/agentsdk-go/pkg/runtime/skills"
+	"github.com/godeps/agentsdk-go/pkg/runtime/subagents"
 )
 
 func removeCommandLines(prompt string, invs []commands.Invocation) string {

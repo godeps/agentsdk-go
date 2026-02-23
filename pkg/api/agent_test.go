@@ -10,16 +10,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/agent"
-	"github.com/cexll/agentsdk-go/pkg/config"
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
-	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
-	"github.com/cexll/agentsdk-go/pkg/message"
-	"github.com/cexll/agentsdk-go/pkg/model"
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
-	"github.com/cexll/agentsdk-go/pkg/runtime/skills"
-	"github.com/cexll/agentsdk-go/pkg/security"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/godeps/agentsdk-go/pkg/agent"
+	"github.com/godeps/agentsdk-go/pkg/config"
+	coreevents "github.com/godeps/agentsdk-go/pkg/core/events"
+	corehooks "github.com/godeps/agentsdk-go/pkg/core/hooks"
+	"github.com/godeps/agentsdk-go/pkg/message"
+	"github.com/godeps/agentsdk-go/pkg/model"
+	"github.com/godeps/agentsdk-go/pkg/runtime/commands"
+	"github.com/godeps/agentsdk-go/pkg/runtime/skills"
+	"github.com/godeps/agentsdk-go/pkg/security"
+	"github.com/godeps/agentsdk-go/pkg/tool"
 )
 
 func TestRuntimeRequiresModelFactory(t *testing.T) {

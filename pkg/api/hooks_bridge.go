@@ -5,9 +5,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
-	corehooks "github.com/cexll/agentsdk-go/pkg/core/hooks"
+	"github.com/godeps/agentsdk-go/pkg/config"
+	coreevents "github.com/godeps/agentsdk-go/pkg/core/events"
+	corehooks "github.com/godeps/agentsdk-go/pkg/core/hooks"
 )
 
 func newHookExecutor(opts Options, recorder HookRecorder, settings *config.Settings) *corehooks.Executor {

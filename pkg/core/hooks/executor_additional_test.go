@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/core/events"
+	"github.com/godeps/agentsdk-go/pkg/core/events"
 )
 
 func TestExecutorWithWorkDirAndClose(t *testing.T) {

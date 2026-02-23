@@ -1,4 +1,4 @@
-module github.com/cexll/agentsdk-go
+module github.com/godeps/agentsdk-go
 
 go 1.24.0
 

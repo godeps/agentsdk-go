@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
-	"github.com/cexll/agentsdk-go/pkg/security"
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	coreevents "github.com/godeps/agentsdk-go/pkg/core/events"
+	"github.com/godeps/agentsdk-go/pkg/security"
+	"github.com/godeps/agentsdk-go/pkg/tool"
 )
 
 func TestBuildPermissionResolverHandlerAndApprovals(t *testing.T) {

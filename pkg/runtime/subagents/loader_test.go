@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
+	"github.com/godeps/agentsdk-go/pkg/config"
 )
 
 func TestLoadFromFS_Basic(t *testing.T) {

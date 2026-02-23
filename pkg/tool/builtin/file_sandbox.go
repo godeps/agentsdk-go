@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/cexll/agentsdk-go/pkg/security"
+	"github.com/godeps/agentsdk-go/pkg/security"
 )
 
 const defaultMaxFileBytes = 1 << 20 // 1 MiB

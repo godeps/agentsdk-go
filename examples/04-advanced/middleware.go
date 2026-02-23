@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/agent"
-	"github.com/cexll/agentsdk-go/pkg/middleware"
+	"github.com/godeps/agentsdk-go/pkg/agent"
+	"github.com/godeps/agentsdk-go/pkg/middleware"
 )
 
 type middlewareBundle struct {

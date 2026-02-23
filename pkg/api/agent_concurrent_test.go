@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	coreevents "github.com/cexll/agentsdk-go/pkg/core/events"
-	"github.com/cexll/agentsdk-go/pkg/model"
+	coreevents "github.com/godeps/agentsdk-go/pkg/core/events"
+	"github.com/godeps/agentsdk-go/pkg/model"
 )
 
 type blockingModel struct {

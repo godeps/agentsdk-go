@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/message"
+	"github.com/godeps/agentsdk-go/pkg/message"
 )
 
 type diskHistoryPersister struct {

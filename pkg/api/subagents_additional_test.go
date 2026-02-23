@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/subagents"
+	"github.com/godeps/agentsdk-go/pkg/runtime/subagents"
 )
 
 func TestDefaultSubagentDefinitions(t *testing.T) {

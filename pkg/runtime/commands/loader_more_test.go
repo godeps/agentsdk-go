@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
+	"github.com/godeps/agentsdk-go/pkg/config"
 )
 
 func TestParseFrontMatterAndApplyArguments(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/tool"
+	"github.com/godeps/agentsdk-go/pkg/tool"
 )
 
 const bashOutputDescription = `

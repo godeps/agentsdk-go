@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/cexll/agentsdk-go/pkg/sandbox"
-	"github.com/cexll/agentsdk-go/pkg/security"
+	"github.com/godeps/agentsdk-go/pkg/sandbox"
+	"github.com/godeps/agentsdk-go/pkg/security"
 )
 
 // Executor wires tool registry lookup with sandbox enforcement.

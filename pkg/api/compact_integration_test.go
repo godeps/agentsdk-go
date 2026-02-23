@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/message"
+	"github.com/godeps/agentsdk-go/pkg/message"
 )
 
 func TestRuntimeRun_LongConversationCompactsAndPersists(t *testing.T) {

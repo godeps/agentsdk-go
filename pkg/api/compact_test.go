@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/message"
-	"github.com/cexll/agentsdk-go/pkg/model"
+	"github.com/godeps/agentsdk-go/pkg/message"
+	"github.com/godeps/agentsdk-go/pkg/model"
 )
 
 type compactStubModel struct {

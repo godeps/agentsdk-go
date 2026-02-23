@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/runtime/commands"
+	"github.com/godeps/agentsdk-go/pkg/runtime/commands"
 )
 
 func TestSlashCommandExecutes(t *testing.T) {

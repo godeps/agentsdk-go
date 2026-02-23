@@ -3,7 +3,7 @@ package api
 import (
 	"testing"
 
-	"github.com/cexll/agentsdk-go/pkg/config"
+	"github.com/godeps/agentsdk-go/pkg/config"
 )
 
 func TestAllowedByManagedPoliciesPrefersDeny(t *testing.T) {
